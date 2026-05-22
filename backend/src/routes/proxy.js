@@ -1126,6 +1126,206 @@ router.get('/video/query', async (req, res) => {
 });
 
 // ========================================================================
+// Seedance 2.0(异步)— 完全对齐 gpt-image-2-web runSeedance / pollSeedance
+//   submit: POST ${ZHENZHEN_BASE_URL}/seedance/v3/contents/generations/tasks
+//   query : GET  ${ZHENZHEN_BASE_URL}/seedance/v3/contents/generations/tasks/{tid}
+// payload: { model, content[], duration, ratio, resolution, generate_audio,
+//            return_last_frame, watermark, tools?[web_search], seed? }
+// content 数组成员:
+//   { type:'text', text }
+//   { type:'image_url', image_url:{url}, role:'first_frame'|'last_frame'|'reference_image' }
+//   { type:'video_url', video_url:{url}, role:'reference_video' }
+//   { type:'audio_url', audio_url:{url}, role:'reference_audio' }
+// ========================================================================
+router.post('/seedance/submit', async (req, res) => {
+  const settings = loadRawSettings();
+  if (!settings?.zhenzhenApiKey) {
+    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
+  }
+  const apiKey = settings.zhenzhenApiKey;
+  const baseUrl = config.ZHENZHEN_BASE_URL;
+  const {
+    model, prompt,
+    duration, ratio, resolution,
+    generate_audio, return_last_frame, watermark, web_search,
+    seed,
+    firstFrame, lastFrame,
+    refImages,
+    videos, audios,
+  } = req.body || {};
+
+  if (!model) return res.status(400).json({ success: false, error: 'model 必填' });
+  if (!prompt) return res.status(400).json({ success: false, error: 'prompt 不得为空' });
+
+  try {
+    const content = [{ type: 'text', text: String(prompt) }];
+
+    const hasF = !!firstFrame;
+    const hasL = !!lastFrame;
+
+    // first_frame:
+    //   - 单独 first_frame(无 last_frame): 不带 role
+    //   - 与 last_frame 同时存在: role='first_frame'
+    if (hasF) {
+      const u = await uploadRefToZhenzhen(firstFrame, apiKey);
+      if (!u) throw new Error('first_frame 上传失败');
+      const e = { type: 'image_url', image_url: { url: u } };
+      if (hasL) e.role = 'first_frame';
+      content.push(e);
+    }
+
+    // last_frame: 必须与 first_frame 同时
+    if (hasL && hasF) {
+      const u = await uploadRefToZhenzhen(lastFrame, apiKey);
+      if (!u) throw new Error('last_frame 上传失败');
+      content.push({ type: 'image_url', image_url: { url: u }, role: 'last_frame' });
+    }
+
+    // reference_image
+    if (Array.isArray(refImages)) {
+      for (let i = 0; i < refImages.length; i++) {
+        const u = await uploadRefToZhenzhen(refImages[i], apiKey);
+        if (u) content.push({ type: 'image_url', image_url: { url: u }, role: 'reference_image' });
+      }
+    }
+
+    // reference_video / reference_audio (传入的应是 URL,不上传文件)
+    if (Array.isArray(videos)) {
+      for (const v of videos) {
+        if (typeof v === 'string' && v) {
+          content.push({ type: 'video_url', video_url: { url: v }, role: 'reference_video' });
+        }
+      }
+    }
+    if (Array.isArray(audios)) {
+      for (const a of audios) {
+        if (typeof a === 'string' && a) {
+          content.push({ type: 'audio_url', audio_url: { url: a }, role: 'reference_audio' });
+        }
+      }
+    }
+
+    const payload = {
+      model,
+      content,
+      duration: parseInt(duration ?? 5, 10),
+      ratio: ratio || '16:9',
+      resolution: resolution || '720p',
+      generate_audio: generate_audio !== false,
+      return_last_frame: return_last_frame === true,
+      watermark: watermark === true,
+    };
+    if (web_search === true) payload.tools = [{ type: 'web_search' }];
+    if (typeof seed === 'number' && seed !== -1) payload.seed = seed;
+
+    console.log('[upstream] Seedance2.0 → /seedance/v3/contents/generations/tasks model:', model,
+      'duration:', payload.duration, 'ratio:', payload.ratio, 'resolution:', payload.resolution,
+      'content_items:', content.length);
+
+    const r = await fetch(`${baseUrl}/seedance/v3/contents/generations/tasks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify(payload),
+    });
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch {
+      return res.status(500).json({ success: false, error: '上游响应非 JSON: ' + text.slice(0, 200) });
+    }
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, error: data?.error?.message || data?.message || `上游 HTTP ${r.status}` });
+    }
+    const taskId = data?.id || data?.task_id;
+    if (!taskId) return res.status(500).json({ success: false, error: '未获取到 task_id: ' + text.slice(0, 200) });
+    res.json({ success: true, data: { taskId, raw: data } });
+  } catch (e) {
+    console.error('proxy/seedance/submit 错误:', e);
+    res.status(500).json({ success: false, error: e.message || '请求失败' });
+  }
+});
+
+router.get('/seedance/query', async (req, res) => {
+  const settings = loadRawSettings();
+  if (!settings?.zhenzhenApiKey) {
+    return res.status(400).json({ success: false, error: '未配置贞贞工坊 API Key' });
+  }
+  const taskId = String(req.query.taskId || '').trim();
+  if (!taskId) return res.status(400).json({ success: false, error: 'taskId 必填' });
+
+  const apiKey = settings.zhenzhenApiKey;
+  const baseUrl = config.ZHENZHEN_BASE_URL;
+  const upstream = `${baseUrl}/seedance/v3/contents/generations/tasks/${encodeURIComponent(taskId)}`;
+
+  try {
+    const r = await fetch(upstream, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch {
+      return res.status(500).json({ success: false, error: '上游响应非 JSON: ' + text.slice(0, 200) });
+    }
+    if (!r.ok) {
+      return res.status(r.status).json({ success: false, error: data?.error?.message || `上游 HTTP ${r.status}` });
+    }
+    // 状态归一(对齐主项目)
+    let st = String(data?.status || '').toLowerCase();
+    if (st === 'success') st = 'succeeded';
+    if (st === 'fail' || st === 'failure') st = 'failed';
+
+    let videoUrl = null;
+    if (st === 'succeeded') {
+      // 多重路径解析 video_url(对齐 pollSeedance line 3287-3296)
+      let vUrl = null;
+      const rc = data?.content;
+      if (rc && typeof rc === 'object' && !Array.isArray(rc)) {
+        vUrl = rc.video_url || rc.videoUrl;
+      }
+      if (!vUrl && data?.data && typeof data.data === 'object') {
+        const dc = data.data.content;
+        if (dc && typeof dc === 'object') vUrl = dc.video_url || dc.videoUrl;
+        if (!vUrl) vUrl = data.data.video_url || data.data.videoUrl;
+      }
+      if (!vUrl && Array.isArray(data?.results)) {
+        for (const it of data.results) {
+          if (it && (it.outputType === 'mp4' || it.outputType === 'video' || (it.url && /\.mp4(\?|$)/i.test(it.url)))) {
+            vUrl = it.url; break;
+          }
+          if (it && it.url && !vUrl) vUrl = it.url;
+        }
+      }
+      if (!vUrl && Array.isArray(data?.content)) {
+        for (const it of data.content) {
+          if (it?.type === 'video_url') {
+            const vu = it.video_url;
+            vUrl = typeof vu === 'string' ? vu : (vu && vu.url);
+            if (vUrl) break;
+          }
+        }
+      }
+      if (!vUrl) vUrl = data?.video_url || data?.videoUrl;
+
+      if (vUrl) {
+        // 转存到本地
+        videoUrl = await saveRemoteVideo(vUrl);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        status: st || 'pending',
+        progress: data?.progress || '',
+        videoUrl,
+        failReason: data?.fail_reason || data?.failReason || null,
+        raw: data,
+      },
+    });
+  } catch (e) {
+    console.error('proxy/seedance/query 错误:', e);
+    res.status(500).json({ success: false, error: e.message || '查询失败' });
+  }
+});
+
+// ========================================================================
 // 音频生成(Suno - 异步)
 // 协议(贞贞工坊):POST /suno/generate + GET /suno/feed/:clipIds
 // 模式:generate / cover / extend

@@ -38,6 +38,7 @@ import TextNode from './nodes/TextNode';
 import ImageNode from './nodes/ImageNode';
 import LLMNode from './nodes/LLMNode';
 import VideoNode from './nodes/VideoNode';
+import SeedanceNode from './nodes/SeedanceNode';
 import AudioNode from './nodes/AudioNode';
 import RunningHubNode from './nodes/RunningHubNode';
 import RhConfigNode from './nodes/RhConfigNode';
@@ -80,7 +81,7 @@ const SPECIFIC_NODES: Record<string, any> = {
   text: TextNode,
   image: ImageNode,
   video: VideoNode,
-  seedance: VideoNode, // 复用 VideoNode,默认 model = seedance-2.0
+  seedance: SeedanceNode, // 完全对齐 gpt-image-2-web Seedance2.0(独立 /seedance/v3 路径)
   audio: AudioNode,
   llm: LLMNode,
   runninghub: RunningHubNode,
@@ -118,7 +119,20 @@ const SPECIFIC_NODES: Record<string, any> = {
 const INITIAL_DATA: Record<string, Record<string, any>> = {
   image: { model: 'gpt-image-2', aspectRatio: '1:1', sizeLevel: '1K', referenceImages: [] },
   edit: { mode: 'edit', model: 'gpt-image-2', aspectRatio: '1:1', sizeLevel: '1K', referenceImages: [] },
-  seedance: { model: 'seedance-2.0' },
+  seedance: {
+    model: 'doubao-seedance-2-0-260128',
+    duration: 5,
+    ratio: '16:9',
+    resolution: '720p',
+    generateAudio: true,
+    returnLastFrame: false,
+    watermark: false,
+    webSearch: false,
+    seed: -1,
+    maxPoll: 360,
+    pollInt: 10,
+    frameMode: 'auto',
+  },
   cinematic: { kind: 'cinematic' },
   'video-motion': { kind: 'video-motion' },
   'multi-angle-3d': { preset: 'multi-angle-3d' },

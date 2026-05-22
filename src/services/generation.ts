@@ -326,6 +326,69 @@ export async function queryVideo(taskId: string): Promise<VideoQueryResult> {
 }
 
 // ========================================================================
+// Seedance 2.0 (异步) — 完全对齐 gpt-image-2-web runSeedance / pollSeedance
+//   submit: POST /api/proxy/seedance/submit
+//   query : GET  /api/proxy/seedance/query?taskId=
+// ========================================================================
+export interface SeedanceSubmitRequest {
+  /** 'doubao-seedance-2-0-260128' | 'doubao-seedance-2-0-fast-260128' */
+  model: string;
+  prompt: string;
+  /** 时长(秒) 4..15 */
+  duration?: number;
+  /** 比例 16:9|9:16|1:1|4:3|3:4|21:9|9:21|adaptive */
+  ratio?: string;
+  /** 分辨率 480p|720p|native1080p|1080p|2k|4k */
+  resolution?: string;
+  /** 生成音频（默认 true） */
+  generate_audio?: boolean;
+  /** 返回末帧 */
+  return_last_frame?: boolean;
+  /** 水印 */
+  watermark?: boolean;
+  /** 启用 web_search 工具 */
+  web_search?: boolean;
+  /** 随机种子 -1=不传 */
+  seed?: number;
+  /** 首帧参考(base64 dataURL 或 /files/* URL)，后端会上传取 URL */
+  firstFrame?: string;
+  /** 末帧参考(需与 firstFrame 同时传) */
+  lastFrame?: string;
+  /** 参考图多张(reference_image) */
+  refImages?: string[];
+  /** 参考视频 URL 多个 */
+  videos?: string[];
+  /** 参考音频 URL 多个 */
+  audios?: string[];
+}
+
+export async function submitSeedance(req: SeedanceSubmitRequest): Promise<{ taskId: string }> {
+  const r = await fetch('/api/proxy/seedance/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  const data = await r.json();
+  if (!r.ok || !data.success) throw new Error(data?.error || `HTTP ${r.status}`);
+  return data.data;
+}
+
+export interface SeedanceQueryResult {
+  /** 'pending' | 'running' | 'succeeded' | 'failed' (已后端归一) */
+  status: string;
+  progress?: string;
+  videoUrl?: string | null;
+  failReason?: string | null;
+}
+
+export async function querySeedance(taskId: string): Promise<SeedanceQueryResult> {
+  const r = await fetch(`/api/proxy/seedance/query?taskId=${encodeURIComponent(taskId)}`);
+  const data = await r.json();
+  if (!r.ok || !data.success) throw new Error(data?.error || `HTTP ${r.status}`);
+  return data.data;
+}
+
+// ========================================================================
 // 音频 Suno(异步)
 // ========================================================================
 export type AudioMode = 'generate' | 'cover' | 'extend';
