@@ -343,13 +343,13 @@ const LLMNode = ({ id, data, selected }: NodeProps) => {
       <Handle
         type="target"
         position={Position.Left}
-        className="!bg-sky-300 !border-0"
+        className="!bg-sky-300 !border-0 !z-10"
       />
       {/* 输出 Handle — 固定在整体右侧 */}
       <Handle
         type="source"
         position={Position.Right}
-        className="!bg-sky-300 !border-0"
+        className="!bg-sky-300 !border-0 !z-10"
       />
     {/* 主体 */}
     <div
