@@ -1242,3 +1242,303 @@ position: atScreen
 - 选区菜单（contextMenu）与画布菜单（paneMenu）是两个独立 state，同时只能存在一个。
 
 ---
+
+## 17. Handle（端口）渲染规范与像素风兼容
+
+### 17.1 Handle 位置与层级
+
+| 要素 | 要求 | 说明 |
+|---|---|---|
+| 定位层 | **外层容器 div** 内的直接子级 | Handle 必须放在节点最外层容器中，不能嵌套在内部面板内，否则双列布局下连接点位置会偏移 |
+| z-index | **`!z-10`** | Handle 必须浮在节点主体面板之上，否则会被 `box-shadow` / `border` / 背景遮挡 |
+| className 不用 inline style | `className="!bg-sky-300 !border-0 !z-10"` | 禁止用 `style={{ background, width, height }}` —— 会阻止像素风 CSS 覆盖 |
+
+### 17.2 像素风 Handle 样式（theme-pixel.css 第 494–506 行）
+
+```css
+html[data-theme-style="pixel"] .react-flow__handle {
+  width: 10px !important;
+  height: 10px !important;
+  border-radius: 2px !important;
+  border: 2px solid var(--px-ink) !important;
+  background: var(--px-yellow) !important;
+}
+.react-flow__handle.target { background: var(--px-mint) !important; }
+.react-flow__handle.source { background: var(--px-pink) !important; }
+```
+
+任何节点的 Handle 在像素风下必须是：**target=薄荷绿方块** / **source=粉色方块** / **2px 黑边** / **2px 圆角（方形）**。若看到 Handle 变成白色卡片样式或不可见，说明被其他 CSS 选择器覆盖（见 §17.3）。
+
+### 17.3 CSS 特异性踩坑：LLM 节点双列 Handle 被覆盖
+
+**问题**：像素风 CSS 选择器 `.react-flow__node-llm > div:first-child > div` 会匹配到 Handle 元素（因为 Handle 渲染为 div.react-flow__handle），将其强制设为卡片样式（白底+黑边+硬阴影）。
+
+**修复**：加 `:not(.react-flow__handle)` 排除：
+
+```css
+html[data-theme-style="pixel"] .react-flow__node-llm > div:first-child > div:not(.react-flow__handle) {
+  /* 只影响主体面板和聊天面板，不影响 Handle */
+}
+```
+
+**规则**：任何新的像素风 CSS 选择器如果会匹配到节点内部的 `div`，必须显式排除 `.react-flow__handle`。
+
+### 17.4 端口类型与色彩映射
+
+| PortType | 颜色 HEX | Tailwind | 节点 |
+|---|---|---|---|
+| `text` | `#7dd3fc` | sky-300 | text / llm / idea / bp / cinematic / video-motion |
+| `image` | `#fcd34d` | amber-300 | image / upload(image) / resize / upscale / grid-crop / combine / remove-bg / edit / drawing-board / storyboard-grid / multi-angle-3d / panorama-720 / penguin-portrait |
+| `video` | `#fda4af` | rose-300 | video / seedance / frame-extractor / video-output |
+| `audio` | `#c4b5fd` | violet-300 | audio / upload(audio) |
+| `metadata` | `#67e8f9` | cyan-300 | portrait-metadata |
+| `config` | `#a5b4fc` | indigo-300 | rh-config / runninghub |
+| `any` | `#cbd5e1` | slate-300 | relay |
+
+**连接校验**：`arePortsCompatible(sourceOutputs, targetInputs)` —— 两侧端口类型集合必须有交集，或任一侧含 `any`。
+
+---
+
+## 18. LLM 节点双列布局与双击编辑实现规范
+
+### 18.1 双列架构
+
+```
+╔═════════════════════════════════════════════════════════════════╗
+║ div.relative.flex.items-start.gap-0  (外层容器)                 ║
+║                                                                   ║
+║  [Handle target !z-10]         [Handle source !z-10]              ║
+║                                                                   ║
+║  ┌─ 左列 w-[320px] ──────┐    ┌─ 右列 w-[260px] ─────┐      ║
+║  │ 模型 / 参数 / 提示词    │    │ 会话历史            │      ║
+║  │ 图片上传 / 发送按钮  │    │ 双击编辑模式        │      ║
+║  │ ref=mainRef          │    │ height=mainH          │      ║
+║  └─────────────────────┘    └────────────────────┘      ║
+╚═════════════════════════════════════════════════════════════════╝
+```
+
+**关键实现**：
+
+```tsx
+// 外层容器
+return (
+  <div className="relative flex items-start gap-0">
+    <Handle type="target" position={Position.Left} className="!bg-sky-300 !border-0 !z-10" />
+    <Handle type="source" position={Position.Right} className="!bg-sky-300 !border-0 !z-10" />
+    {/* 左列主体 */}
+    <div ref={mainRef} className="w-[320px] ..." />
+    {/* 右列会话 */}
+    {hasChat && <div style={{ height: mainH ? `${mainH}px` : undefined }} ... />}
+  </div>
+);
+```
+
+### 18.2 高度同步铁律
+
+| 规则 | 实现 | 原因 |
+|---|---|---|
+| 右列 height = 左列 offsetHeight | `style={{ height: mainH + 'px' }}` | 确保底部对齐 |
+| `mainH` 必须用 `useLayoutEffect` + `useState` | 见下方代码 | 首次渲染时 ref 未挂载，直接读为 undefined |
+| `useLayoutEffect` 无依赖数组 | 每次渲染重新测量 | 左列内容变化时右列自动跟随 |
+| 禁止修改左列高度来适配右列 | 左列为只读约束 | 防止布局死循环 |
+
+```tsx
+const [mainH, setMainH] = useState<number>(0);
+useLayoutEffect(() => {
+  if (mainRef.current) setMainH(mainRef.current.offsetHeight);
+});
+```
+
+### 18.3 双击编辑功能
+
+| 要素 | 实现 |
+|---|---|
+| 双击触发 | 右列 assistant 消息 `onDoubleClick={() => handleDoubleClickMsg(i)}` |
+| 编辑状态 | `editingIdx: number \| null` + `editText: string` |
+| 编辑模式 UI | 整个右列切换为 `flex flex-col` + 单个 textarea `flex-1` 擑满面板 |
+| 保存 | `onBlur` 自动保存，更新 history + 同步最后 assistant 消息到 `data.prompt` 输出 |
+| 取消 | `Escape` 键取消编辑，不保存 |
+| 单滚动条 | 编辑时隐藏所有历史消息，仅渲染 textarea，避免父容器 + textarea 双滚动条 |
+
+**关键代码模式**：
+```tsx
+// 右列容器 className 根据编辑状态切换
+className={`... ${editingIdx !== null ? 'flex flex-col' : 'overflow-y-auto space-y-1.5'}`}
+
+// 内容区域三元切换
+{editingIdx !== null ? (
+  <textarea className="w-full flex-1 resize-none ... overflow-y-auto" />
+) : (
+  <>{/* 正常历史消息列表 */}</>
+)}
+```
+
+### 18.4 禁止事项
+
+- 禁止给编辑框加 `backdropFilter: 'blur(...)'`（会导致文字模糊）
+- 禁止在右列和 textarea 同时设置 `overflow-y-auto`（双滚动条）
+- 禁止给 textarea 设置 `style={{ height: mainH }}` + 右列也有 `overflow-y-auto`（上一版导致双滚动条的根因）
+- Handle 禁止放在左列主体 div 内部（会导致连接点偏移到主体中央而非整体左右两侧）
+
+---
+
+## 19. 像素风主题 CSS 规范与踩坑总结
+
+### 19.1 设计原则
+
+- 触发条件：`html[data-theme-style="pixel"]`
+- 变量体系：`--px-bg` / `--px-surface` / `--px-ink` / `--px-mint` / `--px-pink` / `--px-yellow` / `--px-sky` 等
+- 全局强制覆盖：通过高特异性 + `!important` 将所有科技风暗色节点转为奶油白底 + 糖果色
+
+### 19.2 关键 CSS 规则级别
+
+| 规则 | 用途 | 特异性级别 |
+|---|---|---|
+| `.react-flow__node:not(.react-flow__node-groupBox) > div:first-child` | 节点根元素白底 + 黑边 + 硬阴影 | (0,0,3,3) |
+| `.react-flow__node-llm > div:first-child > div:not(.react-flow__handle)` | LLM 双列子面板 | (0,0,4,3) |
+| `.react-flow__handle` | Handle 小方块样式 | (0,0,2,1) |
+| `.react-flow__handle.target / .source` | target=mint / source=pink | (0,0,3,1) |
+
+### 19.3 常见踩坑清单
+
+| 坑 | 现象 | 修复 |
+|---|---|---|
+| 新节点内部 div 被强制白底 | 暗色 `bg-white/5` 等无效 | 正常行为，像素风就是白底 |
+| GroupBox 透明底被覆盖 | 组容器变不透明 | 选择器加 `:not(.react-flow__node-groupBox)` |
+| Handle 变成卡片样式 | 连接点变成白色大块 | 加 `:not(.react-flow__handle)` |
+| 节点文字色异常 | `text-white/80` 变成黑色 | `[class*="text-white/"]` 规则将其转为 `--px-ink-soft`，正常行为 |
+| button 颜色不对 | `bg-orange-500/20` 等浅色按钮在奶油底上看不清 | 全局 `button.w-full` 强制 mint 糖果背景 |
+| inline style 覆盖了像素风 | `style={{ background: 'xxx' }}` 优先级最高 | 改用 Tailwind className，让像素风 CSS `!important` 可以覆盖 |
+| 滚动条太粗 | 像素风下滚动条很明显 | 已设置 `scrollbar-width: thin` + `width: 2px` |
+
+### 19.4 新增节点时像素风检查清单
+
+1. 背景色不用 `style={{ background }}` —— 用 Tailwind class 或让像素风 CSS 统一覆盖
+2. Handle 只用 `className` 不用 inline style，并加 `!z-10`
+3. 如果节点有双列/多 div 布局，检查 `.react-flow__node-xxx > div:first-child > div` 是否会误伤 Handle
+4. 组容器类型节点必须在全局选择器中用 `:not()` 排除
+
+---
+
+## 20. 连接点与端口设计规范
+
+### 20.1 单端口 vs 多端口
+
+| 节点 | 输入 | 输出 | 说明 |
+|---|---|---|---|
+| 多数节点 | 1×target(Left) | 1×source(Right) | 默认单端口 |
+| AudioNode | 1×target(Left) | 2×source(Right): `audio-0` / `audio-1` | 双轨输出 |
+| SeedanceNode | 4×target(Left): text/image/video/audio | 1×source(Right) | 多类型输入 |
+| RunningHubNode | 5×target(Left) | 2×source(Right): image/video | 最多端口的节点 |
+
+### 20.2 多 Handle 定位策略
+
+当节点有多个同侧 Handle 时，用 `top` 百分比分散：
+
+```tsx
+<Handle id="audio-0" position={Position.Right} style={{ top: '33%' }} />
+<Handle id="audio-1" position={Position.Right} style={{ top: '66%' }} />
+```
+
+下游节点 `collectUpstream` 通过 `edge.sourceHandle` 区分来源。
+
+### 20.3 上游数据采集模式
+
+所有可执行节点内部的 `collectUpstream()` 函数遍历：
+1. `getEdges().filter(e => e.target === id)` —— 获取所有指向当前节点的边
+2. 通过 `edge.source` 找到上游节点
+3. 从 `node.data` 中提取 `prompt` / `imageUrl` / `videoUrl` / `audioUrl` 等
+4. 多 Handle 场景用 `edge.sourceHandle` 匹配字段
+
+---
+
+## 21. 项目约定与注意事项汇总
+
+### 21.1 文件结构补充（src/components/nodes 全部 30 文件）
+
+```
+nodes/
+├── useUpdateNodeData.ts    # 共享 hook：获取 setNodes 并封装 update(patch) 便捷方法
+├── LLMNode.tsx             # 核心 | 656 行 | 双列布局 + 双击编辑 + SSE流式
+├── ImageNode.tsx           # 核心 | 51KB | GPT2/NanoBanana/Pro/FAL/MJ 五套面板
+├── VideoNode.tsx           # 核心 | Veo3.1/Grok/FAL 三套
+├── SeedanceNode.tsx        # 核心 | 独立节点(2.0+)，多 role 参考图/视频/音频
+├── AudioNode.tsx           # 核心 | Suno 三模式 + 双轨输出
+├── RunningHubNode.tsx      # 核心 | ComfyUI 工作流任务
+├── GroupBoxNode.tsx        # 特殊 | 组容器(打组)
+├── UploadNode.tsx          # 输入 | 图片/视频/音频自适应
+├── TextNode.tsx            # 输入 | 纯文本提示词
+├── DrawingBoardNode.tsx    # 工具 | 手绘画板
+├── BrowserNode.tsx         # 工具 | iframe 网页
+├── ImageCompareNode.tsx    # 工具 | 图片对比
+├── FrameExtractorNode.tsx  # 工具 | 视频抽帧
+├── ResizeNode.tsx          # 工具 | 缩放
+├── UpscaleNode.tsx         # 工具 | 超分辨率
+├── GridCropNode.tsx        # 工具 | 网格裁剪
+├── CombineNode.tsx         # 工具 | 拼接
+├── RemoveBgNode.tsx        # 工具 | 去背景
+├── ImageOpFrame.tsx        # 工具 | 通用图像操作框架
+├── PresetImageNode.tsx     # 特殊 | 多角度/全景/企鹅胖像
+├── PortraitMetadataNode.tsx# 特殊 | 胖像元数据
+├── StoryboardGridNode.tsx  # 特殊 | 分镜网格
+├── IdeaNode.tsx            # 辅助 | 灵感输入
+├── BpNode.tsx              # 辅助 | 分镜处理
+├── RelayNode.tsx           # 辅助 | 中继透传
+├── VideoOutputNode.tsx     # 辅助 | 视频输出展示
+├── ToolboxParamNode.tsx    # 工具箱 | 电影感/动态参数
+└── PlaceholderNode.tsx     # 占位符
+```
+
+### 21.2 Store 清单
+
+| Store | 文件 | 职责 |
+|---|---|---|
+| useCanvasStore | stores/canvas.ts | 画布列表 CRUD |
+| useApiKeyStore | stores/apiKeys.ts | 三套 API Key |
+| useThemeStore | stores/theme.ts | 浅/深色 + 科技/像素双主题 |
+| useRunBusStore | stores/runBus.ts | 批量运行调度 |
+| useLogStore | stores/logs.ts | 日志总线 + 终端面板 |
+| useGroupBusStore | stores/groupBus.ts | GroupBox 执行/删除请求 |
+
+### 21.3 Hooks 清单
+
+| Hook | 文件 | 职责 |
+|---|---|---|
+| useCanvasHistory | hooks/useCanvasHistory.ts | Undo/Redo 栈(250ms节流) |
+| useRunTrigger | hooks/useRunTrigger.ts | 节点订阅运行总线，命中自身则执行 runFn |
+| useUpdateNodeData | nodes/useUpdateNodeData.ts | 节点内部更新 data 的便捷方法 |
+
+### 21.4 全局约定
+
+| 约定 | 说明 |
+|---|---|
+| 前端端口 | `5180`（Vite dev server） |
+| 后端端口 | `18766`（Express） |
+| Vite 代理 | `/api/*` → `http://127.0.0.1:18766` |
+| 数据目录 | `data/`（画布JSON） / `input/`（上传） / `output/`（生成产物） / `thumbnails/` |
+| 节点内部防拖拽 | `onMouseDown={(e) => e.stopPropagation()}` 必加在可交互区域 |
+| 节点内部防滚轮缩放 | `attachWheelBlock(el)` 挂载到滚动容器 |
+| 节点状态字段 | `data.status: 'idle' \| 'generating' \| 'success' \| 'error'` |
+| 默认系统提示词 | `你是一个提示词专家，将用户的提示词优化` |
+| logBus 调用时机 | 提交 / 轮询中 / 完成 / 失败 / 警告 五个点 |
+| 批量运行接入 | `useRunTrigger(id, handleSend)` —— runFn 必须与手动点击“发送”同一函数 |
+| IDE TS 报错 | `./useUpdateNodeData` / `../../hooks/useRunTrigger` 找不到模块 → **IDE 缓存问题**，`tsc --noEmit` 实际编译零错误 |
+
+### 21.5 Git 工作流
+
+- 主分支：`main`
+- 推送命令：`git add -A && git commit -m "..." && git push origin main`
+- 恢复到远程最新：`git fetch origin main && git reset --hard origin/main`
+- 禁止强制推送 `--force`
+
+### 21.6 开发环境注意事项
+
+| 项目 | 说明 |
+|---|---|
+| Node 版本 | 18+ （依赖原生 FormData/Blob） |
+| 后端无热重载 | `backend/package.json` 的 `dev` 是 `node src/server.js`，修改后端代码必须手动重启 |
+| Windows 目录重命名 | 常因进程占用失败，改用 `git reset --hard` 替代 |
+| Tailwind JIT | 新的 class 在开发服务器运行时自动生成，但必须在 tsx 中写完整 class名（不能字符串拼接） |
+| Sharp (imageOps) | 后端图像处理依赖 sharp，首次 `npm install` 会编译原生模块 |
+
+---
