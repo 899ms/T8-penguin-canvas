@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import { memo, useMemo, useRef, useState } from 'react';
+import { Handle, Position, useReactFlow, useStore, type NodeProps } from '@xyflow/react';
 import { MonitorPlay, Type as TypeIcon, Image as ImageIcon, Video as VideoIcon, Music, Download, Pencil, Check } from 'lucide-react';
 import { useUpdateNodeData } from './useUpdateNodeData';
 import { useThemeStore } from '../../stores/theme';
@@ -38,17 +38,29 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
   const isDark = theme === 'dark';
   const d = (data as any) || {};
 
-  // 强制刷新: 上游 data 变更时重算
-  // (xyflow Node.data 变化会触发当前节点重新渲染, 直接在 useMemo 里读 getNodes() 即可)
-  const [tick, setTick] = useState(0);
-  useEffect(() => {
-    // 兜底: 0.5s 节奏拉一次, 避免上游异步任务结束没立刻通知到本节点
-    const t = window.setInterval(() => setTick((v) => (v + 1) % 1e6), 800);
-    return () => window.clearInterval(t);
-  }, []);
+  // 订阅 xyflow store 中的上游签名: 上游 data 变化时本节点重新计算
+  // 用 useStore + 自定义 selector,只在签名字符串变化时触发重渲染,避免循环
+  const upstreamSignature = useStore((s: any) => {
+    try {
+      const edgesArr: any[] = Array.from(s.edges?.values?.() ?? s.edges ?? []);
+      const nodesMap: Map<string, any> = s.nodeLookup || new Map();
+      const sources = edgesArr.filter((e) => e.target === id).map((e) => e.source);
+      const parts: string[] = [];
+      for (const sid of sources) {
+        const n = nodesMap.get(sid);
+        const ud = n?.data || n?.internals?.userNode?.data || {};
+        parts.push(
+          `${sid}|${ud.imageUrl || ''}|${(ud.imageUrls || []).length}|${ud.videoUrl || ''}|${ud.audioUrl || ''}|${(ud.reply || ud.prompt || ud.text || '').slice(0, 80)}`
+        );
+      }
+      return parts.join('::');
+    } catch {
+      return '';
+    }
+  });
 
   const collected = useMemo<Collected>(() => {
-    void tick; // 触发重新计算
+    void upstreamSignature; // 触发重新计算
     const edges = getEdges();
     const nodes = getNodes();
     const upstreamIds = edges.filter((e) => e.target === id).map((e) => e.source);
@@ -101,7 +113,7 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
     });
 
     return out;
-  }, [id, getEdges, getNodes, tick]);
+  }, [id, getEdges, getNodes, upstreamSignature]);
 
   // 文本编辑
   const overrideText: string = typeof d.outputText === 'string' ? d.outputText : '';
