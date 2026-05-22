@@ -268,7 +268,15 @@ ReactFlow 内置：`snapToGrid={snapEnabled} snapGrid={[20, 20]}`。
 | 后端连通检测 | 每 15s `GET /api/status` | `App.tsx` |
 
 ### 全局快捷键
-`Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` / `Ctrl+C` / `Ctrl+V` / `Ctrl+D` / `Ctrl+A` / `Delete` / `Backspace`。
+`Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` / `Ctrl+C` / `Ctrl+V` / `Ctrl+Shift+V` / `Ctrl+D` / `Ctrl+A` / `Delete` / `Backspace`。
+
+- **`Ctrl+V`** 普通粘贴（仅复制选中节点 + 其内部边，偏移 40,40）
+- **`Ctrl+Shift+V`** 连边粘贴（额外保留原节点与画布邻居的**外部入边 / 出边**。例：原有 文本→图像，复制图像节点 → Ctrl+Shift+V 后新图像节点的入口也连上原文本节点的出口）
+
+### 拖线连接
+- 拖动节点 Handle 拉到另一节点 Handle / 节点体 / 连线上 → ReactFlow 默认处理（连接成功或被 `isValidConnection` 拒绝）
+- 拖动释放到**空白画布**（pane / background）→ 弹出候选节点菜单，选中后在拖落位置创建并自动连线
+- 判断逻辑：`event.target.closest('.react-flow__handle | __node | __edge')` 任一命中则不弹菜单
 
 ### 鼠标交互
 
@@ -476,7 +484,7 @@ ReactFlow 节点（src/components/nodes/ImageNode.tsx）
 
 **严禁在 `/api/proxy/image/submit` 内分流 fal**——FAL 参数集与原协议完全不同，混入会造成双路径同时漂移。
 
-#### 三、现有实例（gpt-image-2-fal / nano-banana-pro-fal）
+#### 三、现有实例（gpt-image-2-fal / nano-banana-pro-fal / nano-banana-2-fal镜像）
 
 ##### 3.1 payload 字段对照（字段名严格以主项目 `runGPTFal` / `runNanoFal` 为准）
 
@@ -497,6 +505,26 @@ ReactFlow 节点（src/components/nodes/ImageNode.tsx）
 | 参考图上限 | **5** | **8** |
 | 参考图编码 | URL（贞贞上传） | URL 或 base64 dataURI（`image_mode: 'image_url' \| 'base64'`） |
 
+##### 3.1.1 镜像复用案例 —— `nano-banana-2-fal`
+
+> 主项目 [`gpt-image-2-web/index.html · runGeminiFal`](file:///E:/PenguinPravite/gpt-image-2-web/index.html) 验证：`nano-banana-2-fal` 与 `nano-banana-pro-fal` **endpoint / paramKind / 参数集完全一致**，仅注册名不同。这种场景采用「**镜像注册**」策略，零增量后端/UI 代码：
+
+```ts
+// src/providers/models.ts —— 主模型 nano-banana-2 加一个子选项
+{ value: 'nano-banana-2', label: 'nano-banana-2 (Flash)' },
+{ value: 'nano-banana-2-fal', label: 'nano-banana-2-fal' },
+
+// FAL_REGISTRY 完整镜像 nbpro-fal 的 endpoint/paramKind/maxRefs
+'nano-banana-2-fal': {
+  endpoint: 'fal-ai/nano-banana-pro/edit',
+  editEndpoint: 'fal-ai/nano-banana-pro/edit',
+  paramKind: 'nbpro-fal',   // **复用** 而非新建
+  maxRefs: 8,
+}
+```
+
+后端 `proxy.js` 的 `FAL_REGISTRY` **必须同步增加同一条**（前后端注册表是两份独立常量），但 `paramKind === 'nbpro-fal'` 分支**不动**——自动复用已有的 payload 拼装。
+
 ##### 3.2 关键代码位置
 
 | 内容 | 位置 |
@@ -510,6 +538,18 @@ ReactFlow 节点（src/components/nodes/ImageNode.tsx）
 ### 11.8 接入新 FAL 子模型的 N 步法（样板）
 
 > 适用场景：后续需要接入**任何一个新 FAL 模型**（例如 `flux-pro-fal` / `seedream-fal` / `recraft-fal` / `imagen3-fal` 等）。以下是可执行清单，**严禁跳步骤**。
+
+#### Step 0a：判断是否「镜像现有 paramKind」
+
+> 若新模型与某已接入模型 endpoint + 参数集**完全一致**（如 `nano-banana-2-fal` ↔ `nano-banana-pro-fal`），**走镜像路径**：
+>
+> 1. `src/providers/models.ts · FAL_REGISTRY` 加一项，`paramKind` **复用现有**
+> 2. `src/providers/models.ts · 主模型 apiModelOptions` 加一项子选项
+> 3. `backend/src/routes/proxy.js · FAL_REGISTRY` **同步加同一项**（不加会报「未知的 FAL 模型」）
+> 4. `features.json · modelRegistry.image` 加一项
+> 5. 跳过 Step 3 / Step 4 / Step 5（已自动复用），直接做 Step 6 验收
+>
+> **特别注意**：`backend/package.json` 的 `dev` 是 `node src/server.js` 无 nodemon 热更，注册表改动须 `taskkill /PID <旧后端> /F` 后手动重启 `node src/server.js`。否则跑的是改前进程，提交会报「未知的 FAL 模型」。
 
 #### Step 0：拿取官方参考
 

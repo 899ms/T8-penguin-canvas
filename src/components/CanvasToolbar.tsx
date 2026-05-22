@@ -377,6 +377,7 @@ export default function CanvasToolbar({
                 ['Ctrl + Shift + Z / Ctrl + Y', '重做'],
                 ['Ctrl + C', '复制选中节点'],
                 ['Ctrl + V', '粘贴节点(自动偏移)'],
+                ['Ctrl + Shift + V', '连边粘贴(保留与原画布邻居的连接)'],
                 ['Ctrl + D', '快速复制选中节点'],
                 ['Delete / Backspace', '删除选中节点 / 连线'],
                 ['Ctrl + A', '全选节点'],

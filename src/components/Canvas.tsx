@@ -156,7 +156,7 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
 
   // 选中节点 / 剪贴板
   const [selectedCount, setSelectedCount] = useState(0);
-  const clipboardRef = useRef<{ nodes: Node[]; edges: Edge[] } | null>(null);
+  const clipboardRef = useRef<{ nodes: Node[]; edges: Edge[]; incomingEdges?: Edge[]; outgoingEdges?: Edge[] } | null>(null);
   const [clipboardCount, setClipboardCount] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -293,19 +293,30 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
     const sel = nodes.filter((n) => n.selected);
     if (sel.length === 0) return;
     const ids = new Set(sel.map((n) => n.id));
+    // 内部边: source/target 都在选中集合 —— 普通粘贴/快速复制会使用
     const selEdges = edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+    // 外部入边: target 在选中集合,source 不在 —— Ctrl+Shift+V 连边粘贴使用
+    const incomingEdges = edges.filter((e) => !ids.has(e.source) && ids.has(e.target));
+    // 外部出边: source 在选中集合,target 不在
+    const outgoingEdges = edges.filter((e) => ids.has(e.source) && !ids.has(e.target));
     clipboardRef.current = {
       nodes: JSON.parse(JSON.stringify(sel)),
       edges: JSON.parse(JSON.stringify(selEdges)),
+      incomingEdges: JSON.parse(JSON.stringify(incomingEdges)),
+      outgoingEdges: JSON.parse(JSON.stringify(outgoingEdges)),
     };
     setClipboardCount(sel.length);
   }, [nodes, edges]);
 
-  const handlePaste = useCallback(() => {
-    const cb = clipboardRef.current;
+  // 普通粘贴: 仅复制选中节点 + 其内部边(与原逻辑一致)
+  // withLinks=true: Ctrl+Shift+V 额外复制原节点的外部入边/出边 —— 将新节点与原画布上还存在的邻居连接
+  const handlePaste = useCallback((withLinks = false) => {
+    const cb = clipboardRef.current as (typeof clipboardRef.current & {
+      incomingEdges?: Edge[];
+      outgoingEdges?: Edge[];
+    }) | null;
     if (!cb || cb.nodes.length === 0) return;
     // 运行时字段黑名单(复制/粘贴时必须重置,避免新节点显示为进行中/携带旧 taskId)
-    // 注意:不清 imageUrl/videoUrl/audioUrl 等内容类字段,因为画板/上传/预设等节点会用它们存用户内容
     const RUNTIME_KEYS = [
       'status', 'taskId', 'progress', 'error',
       'isRunning', 'isPolling', 'pollingTimer',
@@ -332,7 +343,8 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
         data: sanitize(n.data),
       } as Node;
     });
-    const newEdges = cb.edges
+    // 内部边: source/target 都映射到新节点
+    const newInternalEdges = cb.edges
       .map((e, idx) => {
         const s = idMap.get(e.source);
         const t = idMap.get(e.target);
@@ -345,15 +357,47 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
         } as Edge;
       })
       .filter(Boolean) as Edge[];
+    let extraEdges: Edge[] = [];
+    if (withLinks) {
+      // 外部入边: source 保留(原节点须仍在画布), target 映射为新节点
+      const incoming = (cb.incomingEdges || [])
+        .map((e, idx) => {
+          const sourceStillExists = nodes.some((n) => n.id === e.source);
+          const t = idMap.get(e.target);
+          if (!sourceStillExists || !t) return null;
+          return {
+            ...e,
+            id: `e-in-${stamp}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+            source: e.source,
+            target: t,
+          } as Edge;
+        })
+        .filter(Boolean) as Edge[];
+      // 外部出边: source 映射为新节点, target 保留
+      const outgoing = (cb.outgoingEdges || [])
+        .map((e, idx) => {
+          const targetStillExists = nodes.some((n) => n.id === e.target);
+          const s = idMap.get(e.source);
+          if (!targetStillExists || !s) return null;
+          return {
+            ...e,
+            id: `e-out-${stamp}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+            source: s,
+            target: e.target,
+          } as Edge;
+        })
+        .filter(Boolean) as Edge[];
+      extraEdges = [...incoming, ...outgoing];
+    }
     // 取消其他节点的选中,新粘贴节点设为选中
     setNodes((prev) => [...prev.map((n) => ({ ...n, selected: false })), ...newNodes]);
-    setEdges((prev) => [...prev, ...newEdges]);
-  }, []);
+    setEdges((prev) => [...prev, ...newInternalEdges, ...extraEdges]);
+  }, [nodes]);
 
   const handleDuplicate = useCallback(() => {
     handleCopy();
     // 在 copy 完成后下一帧执行 paste(由于上面的 setClipboardCount 是异步)
-    setTimeout(() => handlePaste(), 0);
+    setTimeout(() => handlePaste(false), 0);
   }, [handleCopy, handlePaste]);
 
   const handleDeleteSelected = useCallback(() => {
@@ -702,12 +746,15 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
       const from = connectingFromRef.current;
       connectingFromRef.current = null;
       if (!from) return;
-      // 终点是否落在 Handle / 节点上:是则走正常连接逻辑,否则弹出候选节点菜单
+      // 终点是否落在 Handle / 节点 / 连线上:任何一项命中都交给 ReactFlow 默认连接逻辑处理,不弹出候选菜单
+      // 仅当鼠标释放在“空白画布”(pane / background 本体或其隔层子)时才弹菜单
       const target = event.target as HTMLElement | null;
-      const droppedOnPane =
-        !!target && (target.classList.contains('react-flow__pane') || target.closest('.react-flow__pane'));
-      // 只在拖到空白画布时弹出菜单
-      if (!droppedOnPane) return;
+      if (!target) return;
+      const onHandle = !!target.closest('.react-flow__handle');
+      const onNode = !!target.closest('.react-flow__node');
+      const onEdge = !!target.closest('.react-flow__edge');
+      // 如果落在 Handle/节点/连线 上,让 ReactFlow 自己处理(已连 / 不连),则不弹菜单
+      if (onHandle || onNode || onEdge) return;
       // 获取坐标
       const clientX =
         (event as MouseEvent).clientX ?? (event as TouchEvent).changedTouches?.[0]?.clientX ?? 0;
@@ -825,8 +872,12 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
       if (isEditing) return;
       if (ctrl && e.key.toLowerCase() === 'c') {
         handleCopy();
+      } else if (ctrl && e.shiftKey && e.key.toLowerCase() === 'v') {
+        // Ctrl+Shift+V: 连边粘贴 — 新节点与原画布邻居保持连接
+        e.preventDefault();
+        handlePaste(true);
       } else if (ctrl && e.key.toLowerCase() === 'v') {
-        handlePaste();
+        handlePaste(false);
       } else if (ctrl && e.key.toLowerCase() === 'd') {
         e.preventDefault();
         handleDuplicate();
