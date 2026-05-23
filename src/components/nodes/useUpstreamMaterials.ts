@@ -124,8 +124,9 @@ export function useUpstreamMaterials(nodeId: string): UpstreamMaterials {
       // 视频
       pushUrl(sid, 'video', ud.videoUrl, videos);
 
-      // 音频
+      // 音频 (audioUrl 主轨, audioUrl_1 副轨——AudioNode 双输出口)
       pushUrl(sid, 'audio', ud.audioUrl, audios);
+      pushUrl(sid, 'audio', ud.audioUrl_1, audios);
     }
 
     // 兜底: 一些节点把视频/音频塞在 imageUrl, 通过扩展名识别再纠正

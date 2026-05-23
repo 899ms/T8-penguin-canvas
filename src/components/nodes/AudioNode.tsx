@@ -1,5 +1,5 @@
-import { memo, useEffect, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AlertCircle, Loader2, Music, Sparkles, Square, Upload, X } from 'lucide-react';
 import { submitAudio, queryAudio, uploadAudioForSuno, type AudioMode } from '../../services/generation';
 import { SUNO_VERSIONS, DEFAULT_SUNO_VERSION } from '../../providers/models';
@@ -8,6 +8,10 @@ import { useHasAutoOutput } from './useHasAutoOutput';
 import { useRunTrigger } from '../../hooks/useRunTrigger';
 import { logBus } from '../../stores/logs';
 import { PORT_COLOR } from '../../config/portTypes';
+import { useThemeStore } from '../../stores/theme';
+import { useUpstreamMaterials } from './useUpstreamMaterials';
+import { useOrderedMaterials } from './useOrderedMaterials';
+import MaterialPreviewSection from './MaterialPreviewSection';
 
 /**
  * AudioNode - Suno (generate / cover / extend) — 完全对齐 gpt-image-2-web
@@ -24,12 +28,16 @@ const MODES: Array<{ id: AudioMode; label: string }> = [
 const AudioNode = ({ id, data, selected }: NodeProps) => {
   const update = useUpdateNodeData(id);
   const hasAutoOutput = useHasAutoOutput(id);
-  const { getEdges, getNodes } = useReactFlow();
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const src = `audio:${id.slice(0, 6)}`;
+
+  // 主题适配
+  const { theme, style: themeStyle } = useThemeStore();
+  const isDark = theme === 'dark';
+  const isPixel = themeStyle === 'pixel';
 
   const d = data as any;
   const mode: AudioMode = d?.mode || 'generate';
@@ -57,28 +65,24 @@ const AudioNode = ({ id, data, selected }: NodeProps) => {
   };
   useEffect(() => () => stopPoll(), []);
 
-  // 收集上游: prompt + audioUrl(用于 cover/extend 兑底)
-  // 支持双输出口: 如上游是 AudioNode 且 sourceHandle='audio-1' 则取 audioUrl_1
+  // === 上游素材聚合 (跨节点统一机制) ===
+  const upstream = useUpstreamMaterials(id);
+  const materialOrder: string[] = Array.isArray(d?.materialOrder) ? d.materialOrder : [];
+  const orderedTexts = useOrderedMaterials(upstream.texts, materialOrder);
+  const orderedAudios = useOrderedMaterials(upstream.audios, materialOrder);
+  const setMaterialOrder = (newOrder: string[]) => update({ materialOrder: newOrder });
+  
+  // 分组动态跟随模式: generate 只要文本, cover/extend 需要参考音频
+  const previewGroups = useMemo<ReadonlyArray<'text' | 'image' | 'video' | 'audio'>>(
+    () => (mode === 'generate' ? ['text'] : ['text', 'audio']),
+    [mode],
+  );
+  
+  // 收集上游: prompt + audioUrl(cover/extend 兼底, 取 ordered 首个)
   const collectUpstream = (): { prompt: string; audioUrl: string } => {
-    const edges = getEdges();
-    const nodes = getNodes();
-    const incomingEdges = edges.filter((e) => e.target === id);
-    const prompts: string[] = [];
-    let audioUrl = '';
-    for (const edge of incomingEdges) {
-      const n = nodes.find((x) => x.id === edge.source);
-      const dn = (n?.data as any) || {};
-      const p = dn.prompt;
-      if (p && typeof p === 'string') prompts.push(p.trim());
-      if (!audioUrl) {
-        if (edge.sourceHandle === 'audio-1' && typeof dn.audioUrl_1 === 'string') {
-          audioUrl = dn.audioUrl_1;
-        } else if (typeof dn.audioUrl === 'string') {
-          audioUrl = dn.audioUrl;
-        }
-      }
-    }
-    return { prompt: prompts.join('\n').trim(), audioUrl };
+    const prompt = orderedTexts.map((t) => t.url).filter((s) => !!s).join('\n').trim();
+    const audioUrl = orderedAudios[0]?.url || '';
+    return { prompt, audioUrl };
   };
 
   // 上传本地音频 → 获取 clipId
@@ -332,6 +336,19 @@ const AudioNode = ({ id, data, selected }: NodeProps) => {
             </div>
           )}
         </div>
+
+        {/* 上游素材聚合预览区 (generate=仅文本, cover/extend=文本+音频) */}
+        <MaterialPreviewSection
+          texts={orderedTexts}
+          audios={orderedAudios}
+          order={materialOrder}
+          onReorder={setMaterialOrder}
+          selected={!!selected}
+          isDark={isDark}
+          isPixel={isPixel}
+          groups={previewGroups}
+          title={mode === 'generate' ? '上游素材 · 歌词提示' : '上游素材 · 参考音频'}
+        />
 
         {showRefArea && (
           <div className="rounded border border-violet-400/30 bg-violet-500/5 p-2 space-y-1.5">
