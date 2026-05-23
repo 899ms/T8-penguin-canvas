@@ -977,7 +977,7 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
       return;
     }
 
-    // 拖动组结束: 将最新的几何成员同步到 data.memberIds(供 GroupBoxNode 显示节点数/执行使用)
+    // 拖动组结束: 将最新的几何成员同步到 data.memberIds(供GroupBoxNode显示节点数/执行使用)
     if (node?.type === 'groupBox' && groupDragRef.current?.groupId === node.id) {
       const latestIds = groupDragRef.current.memberIds;
       setNodes((prev) =>
@@ -988,6 +988,28 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
         )
       );
     }
+  
+    // 标记被用户手动拖动过的自动外挂 OutputNode (id 以 'output-auto-' 开头),
+    // 后续「网格重排」useEffect 会检测 data.userMoved 跳过这些节点, 保留用户位置。
+    // 多选拖动场景: xyflow 只传主拖 node, 本函数连同所有 selected 且带该前缀的节点都打上标记。
+    setNodes((prev) => {
+      const selectedAutoOutputIds = new Set<string>();
+      for (const n of prev) {
+        if (n.selected && typeof n.id === 'string' && n.id.startsWith('output-auto-')) {
+          selectedAutoOutputIds.add(n.id);
+        }
+      }
+      if (typeof node?.id === 'string' && node.id.startsWith('output-auto-')) {
+        selectedAutoOutputIds.add(node.id);
+      }
+      if (selectedAutoOutputIds.size === 0) return prev;
+      return prev.map((n) =>
+        selectedAutoOutputIds.has(n.id)
+          ? { ...n, data: { ...((n.data as any) || {}), userMoved: true } }
+          : n
+      );
+    });
+  
     groupDragRef.current = null;
   }, []);
 
@@ -1821,6 +1843,8 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
         const newY = baseY + rowY[r];
         const cx = n.position?.x ?? 0;
         const cy = n.position?.y ?? 0;
+        // 用户手动拖动过的节点 (data.userMoved=true) 跳过, 保留位置
+        if ((n.data as any)?.userMoved === true) return;
         // 误差大于 1px 才修正, 避免微量抖动触发无限重渲染
         if (Math.abs(cx - newX) > 1 || Math.abs(cy - newY) > 1) {
           updates.set(n.id, { x: newX, y: newY });
