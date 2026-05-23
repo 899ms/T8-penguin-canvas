@@ -36,18 +36,20 @@ const MaterialDragOverlay = () => {
   const { style: themeStyle } = useThemeStore();
   const isPixel = themeStyle === 'pixel';
 
-  // === 全局 capture 阶段 mousedown 拦截 ===
-  // 原因: ReactFlow 在 Ctrl 按下时会渲染 SelectionPane (全屏覆盖层, pointer-events:all),
-  // 接管了所有 mousedown 事件, 导致节点内部 onMouseDown 拿不到 Ctrl+点击.
-  // 解决: 在 document capture 阶段先于 SelectionPane 拦截事件,
-  //       用 elementsFromPoint 穿透 SelectionPane 查找 [data-drag-source] 素材元素.
+  // === 全局 capture 阶段 pointerdown / mousedown 拦截 ===
+  // 原因: ReactFlow v12 在 Pane 上使用 onPointerDownCapture 启动 userSelection.
+  //       pointerdown 在 mousedown 之前触发, 仅拦截 mousedown 无效.
+  // 解决: 在 document 原生 capture 阶段同时拦截 pointerdown / mousedown,
+  //       document capture 会先于 React root 上的 capture 事件触发.
+  //       用 elementsFromPoint 穿透任何覆盖层查找 [data-drag-source] 素材元素.
   useEffect(() => {
-    const onCaptureMouseDown = (e: MouseEvent) => {
+    const handleDown = (e: PointerEvent | MouseEvent): boolean => {
       // 仅响应 Ctrl/Meta + 左键
-      if (e.button !== 0) return;
-      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.button !== 0) return false;
+      if (!(e.ctrlKey || e.metaKey)) return false;
+      if ('isPrimary' in e && (e as PointerEvent).isPrimary === false) return false;
       // 已在拖拽中不重复启动
-      if (useDragMaterialStore.getState().dragging) return;
+      if (useDragMaterialStore.getState().dragging) return false;
 
       // elementsFromPoint 穿透覆盖层取堆叠元素
       const stack = document.elementsFromPoint(e.clientX, e.clientY);
@@ -64,29 +66,41 @@ const MaterialDragOverlay = () => {
           break;
         }
       }
-      if (!dragEl) return;
+      if (!dragEl) return false;
 
       const kind = dragEl.getAttribute('data-drag-kind') as MaterialKind | null;
-      if (!kind) return;
+      if (!kind) return false;
       const url = dragEl.getAttribute('data-drag-url') || undefined;
       const text = dragEl.getAttribute('data-drag-text') || undefined;
       const sourceNodeId = dragEl.getAttribute('data-drag-node-id') || undefined;
       const previewUrl = dragEl.getAttribute('data-drag-preview') || url;
 
-      // 严格拦截: 阻止 ReactFlow SelectionPane 启动选区
+      // 严格拦截: 阻止 ReactFlow Pane 启动选区
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
 
-      start(
-        { kind, url, text, sourceNodeId, previewUrl },
-        e.clientX,
-        e.clientY,
-      );
+      // 只在首个 (pointerdown) 事件中启动拖拽, 后续 mousedown 仅拦截
+      if (!useDragMaterialStore.getState().dragging) {
+        start(
+          { kind, url, text, sourceNodeId, previewUrl },
+          e.clientX,
+          e.clientY,
+        );
+      }
+      return true;
     };
 
-    document.addEventListener('mousedown', onCaptureMouseDown, true);
-    return () => document.removeEventListener('mousedown', onCaptureMouseDown, true);
+    const onPointerDown = (e: PointerEvent) => { handleDown(e); };
+    const onMouseDown = (e: MouseEvent) => { handleDown(e); };
+
+    // 同时拦截 pointerdown 与 mousedown
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('mousedown', onMouseDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('mousedown', onMouseDown, true);
+    };
   }, [start]);
 
   useEffect(() => {
