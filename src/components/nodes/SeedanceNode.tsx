@@ -1,5 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
-import { Handle, Position, useReactFlow, type NodeProps } from '@xyflow/react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { Handle, Position, type NodeProps } from '@xyflow/react';
 import { AlertCircle, Loader2, Film, Sparkles, Square } from 'lucide-react';
 import {
   submitSeedance,
@@ -10,6 +10,10 @@ import { useUpdateNodeData } from './useUpdateNodeData';
 import { useHasAutoOutput } from './useHasAutoOutput';
 import { useRunTrigger } from '../../hooks/useRunTrigger';
 import { logBus } from '../../stores/logs';
+import { useThemeStore } from '../../stores/theme';
+import { useUpstreamMaterials } from './useUpstreamMaterials';
+import { useOrderedMaterials } from './useOrderedMaterials';
+import MaterialPreviewSection from './MaterialPreviewSection';
 
 /**
  * SeedanceNode — 字节 Seedance 2.0 视频分镜节点
@@ -39,10 +43,14 @@ const DURATION_OPTIONS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   const update = useUpdateNodeData(id);
   const hasAutoOutput = useHasAutoOutput(id);
-  const { getEdges, getNodes } = useReactFlow();
   const [error, setError] = useState<string | null>(null);
   const pollTimer = useRef<number | null>(null);
   const src = `seedance:${id.slice(0, 6)}`;
+
+  // 主题适配
+  const { theme, style: themeStyle } = useThemeStore();
+  const isDark = theme === 'dark';
+  const isPixel = themeStyle === 'pixel';
 
   const d = (data as any) || {};
   const model: string = d.model || MODEL_OPTIONS[0].value;
@@ -65,45 +73,26 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   const progress: string = d.progress || '';
   const localPrompt: string = d.prompt || '';
 
-  // 收集上游 prompt + 参考图 + 参考视频 + 参考音频
+  // === 上游素材聚合 (跨节点统一机制) ===
+  const upstream = useUpstreamMaterials(id);
+  const materialOrder: string[] = Array.isArray(d?.materialOrder) ? d.materialOrder : [];
+  const orderedTexts = useOrderedMaterials(upstream.texts, materialOrder);
+  const orderedImages = useOrderedMaterials(upstream.images, materialOrder);
+  const orderedVideos = useOrderedMaterials(upstream.videos, materialOrder);
+  const orderedAudios = useOrderedMaterials(upstream.audios, materialOrder);
+  const setMaterialOrder = (newOrder: string[]) => update({ materialOrder: newOrder });
+
+  // 收集上游 prompt + 参考图 + 参考视频 + 参考音频 (按用户拖拽顺序)
   const collectUpstream = (): {
     prompt: string;
     imageUrls: string[];
     videoUrls: string[];
     audioUrls: string[];
   } => {
-    const edges = getEdges();
-    const nodes = getNodes();
-    const incomingEdges = edges.filter((e) => e.target === id);
-    const prompts: string[] = [];
-    const imageUrls: string[] = [];
-    const videoUrls: string[] = [];
-    const audioUrls: string[] = [];
-    for (const edge of incomingEdges) {
-      const n = nodes.find((x) => x.id === edge.source);
-      const dn = (n?.data as any) || {};
-      const p = dn.prompt;
-      if (p && typeof p === 'string') prompts.push(p.trim());
-      // 图像
-      const u = dn.imageUrl;
-      if (u && typeof u === 'string') imageUrls.push(u);
-      const us = dn.imageUrls;
-      if (Array.isArray(us)) for (const x of us) if (typeof x === 'string') imageUrls.push(x);
-      // 视频 (video 节点 / SD2.0 节点 / upload-video 节点)
-      const vu = dn.videoUrl;
-      if (vu && typeof vu === 'string') videoUrls.push(vu);
-      const vus = dn.videoUrls;
-      if (Array.isArray(vus)) for (const x of vus) if (typeof x === 'string') videoUrls.push(x);
-      // 音频 (audio 节点 / upload-audio) —— 支持双输出口 sourceHandle
-      if (edge.sourceHandle === 'audio-1' && typeof dn.audioUrl_1 === 'string') {
-        audioUrls.push(dn.audioUrl_1);
-      } else {
-        const au = dn.audioUrl;
-        if (au && typeof au === 'string') audioUrls.push(au);
-      }
-      const aus = dn.audioUrls;
-      if (Array.isArray(aus)) for (const x of aus) if (typeof x === 'string') audioUrls.push(x);
-    }
+    const prompts = orderedTexts.map((t) => t.url).filter((s) => !!s);
+    const imageUrls = orderedImages.map((m) => m.url).filter((s) => !!s);
+    const videoUrls = orderedVideos.map((m) => m.url).filter((s) => !!s);
+    const audioUrls = orderedAudios.map((m) => m.url).filter((s) => !!s);
     return { prompt: prompts.join('\n').trim(), imageUrls, videoUrls, audioUrls };
   };
 
@@ -246,7 +235,7 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
   });
 
   const isBusy = status === 'submitting' || status === 'polling';
-  const refsCount = useMemo(() => collectUpstream().imageUrls.length, [getEdges, getNodes, id]); // eslint-disable-line
+  const refsCount = orderedImages.length;
 
   return (
     <div
@@ -421,10 +410,20 @@ const SeedanceNode = ({ id, data, selected }: NodeProps) => {
           </div>
         </div>
 
-        {/* 上游图像计数 */}
-        <div className="text-[10px] text-white/50">
-          参考图(上游): <span className="text-white/80">{refsCount}</span>
-        </div>
+        {/* 上游素材聚合预览区 (代替原「上游图像计数」, Seedance 支持四类素材全开) */}
+        <MaterialPreviewSection
+          texts={orderedTexts}
+          images={orderedImages}
+          videos={orderedVideos}
+          audios={orderedAudios}
+          order={materialOrder}
+          onReorder={setMaterialOrder}
+          selected={!!selected}
+          isDark={isDark}
+          isPixel={isPixel}
+          groups={['text', 'image', 'video', 'audio']}
+          title={`上游素材 · 参考图 ${refsCount}`}
+        />
 
         {/* Prompt */}
         <div>
