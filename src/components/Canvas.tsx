@@ -1723,9 +1723,11 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
         toAddNodes.push({
           id: newId,
           type: 'output',
+          // 网格排列: 每行 3 个, 超过换行。
+          // OutputNode 宽 320 + 横间距 30 = 列宽 350; 行高 360 (包含图像预览).
           position: {
-            x: baseX,
-            y: baseY + offsetIndex * 360,
+            x: baseX + (offsetIndex % 3) * 350,
+            y: baseY + Math.floor(offsetIndex / 3) * 360,
           },
           // pickKind/pickIndex: 下游 OutputNode 只拾上游对应 kind 的第 kindIndex 项,
           // 避免多图场景下所有 OutputNode 都重复显示全部输出
