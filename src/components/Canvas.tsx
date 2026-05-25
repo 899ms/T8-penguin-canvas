@@ -2319,10 +2319,15 @@ function CanvasInner({ onAddNodeRef }: CanvasInnerProps) {
         return { x: baseX + colX[c], y: baseY + rowY[r], w: dims[i].w, h: dims[i].h };
       });
       const _excludeIds = new Set([srcId, ...list.map(n => n.id)]);
-      const _externalNodes = nodes.filter(n => !_excludeIds.has(n.id));
+      // v1.2.10.5-hotfix3: reorder 只需避开其他 output 节点，不需要避开上游源节点（它们在左侧）。
+      // 否则宽大的源节点会把输出推得很远。
+      const _externalNodes = nodes.filter(n => !_excludeIds.has(n.id) && n.type === 'output');
       const _reorderOff = placeBatchNodes(_groupDesired, _externalNodes, {
         source: 'placement:reorder-grid',
         excludeIds: _excludeIds,
+        gap: 0,        // reorder 只防止直接重叠，不要求严格间距
+        step: 40,      // 小步长，结果更紧凑
+        maxTries: 12,  // 限制搜索半径，最多偏移 ~200px
       });
       list.forEach((n, i) => {
         const c = i % REORDER_COLS;
