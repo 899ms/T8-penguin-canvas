@@ -1,7 +1,13 @@
 # T8-penguin-canvas · skill.md
 
 > 项目能力 / 接口 / 文件用途速查手册。
-> 版本：v1.2.10.8 ｜ 仓库：<https://github.com/T8mars/T8-penguin-canvas>
+> 版本：v1.2.10.11 ｜ 仓库：<https://github.com/T8mars/T8-penguin-canvas>
+>
+> v1.2.10.11 增量：开源推送前密钥清理规则落地；`RECHARGE_DEFAULT_ENC` 默认留空，代理 HMAC / 支付回调密钥仅允许通过本地环境变量或私有部署注入，禁止进入 GitHub。
+>
+> v1.2.10.10 增量：充值创建订单前新增同主题强提醒确认框；充值后端补安全硬化（本地 CORS 限制、支付通知空密钥拒绝、订单号随机性增强、订单列表脱敏）。
+>
+> v1.2.10.9 增量：迁移 gpt-image-2-web 已验证的充值系统到 T8 Express/React 架构，复用加密支付代理配置，新增临时 1 元测试档位，保留原 7 个算力档位，暂不迁移余额查询。
 >
 > v1.2.1 增量（§47）：Electron 打包加密链路 3 处根因修复 + 标准化 SOP 沉淀 — bytenode .jsc loader 复刻（vm.Script + cachedData 直跑、跳过 tmpFile 二次 require）+ asar 外 .t8c 的 require MODULE_NOT_FOUND 回退 loader.cjs 自身（解析 app.asar/node_modules/express|cors|multer|sharp）+ backend/src/config.js 识别 T8PC_PACKAGED/T8PC_USER_DATA/T8PC_FRONTEND_DIST 三环境变量（数据写 userData、NODE_ENV=production）+ backend/src/server.js 打包模式 express.static + SPA 兑底（regex 排除 api/files/input/output 4 前缀）+ main.cjs 三处版本号同步 v1.2.0 + 6 项打包前必检 checklist + 完整 SOP 写入本章作为下次打包唯一参考依据。
 >
@@ -1839,6 +1845,10 @@ nodes/
 - 推送命令：`git add -A && git commit -m "..." && git push origin main`
 - 恢复到远程最新：`git fetch origin main && git reset --hard origin/main`
 - 禁止强制推送 `--force`
+- **GitHub 推送前必须做密钥清理**：公开仓库里的 `backend/src/routes/recharge.js::RECHARGE_DEFAULT_ENC` 必须保持空字符串，不能提交任何真实 `AGENT_HMAC_KEY`、`DULUPAY_KEY`、支付平台密钥、代理签名密钥或可逆加密后的同等内容。
+- 私有充值配置只允许通过本地环境变量注入：`RECHARGE_AGENT_BASE_URL`、`RECHARGE_AGENT_HMAC_KEY`、`RECHARGE_WEBSITE_URL`、`RECHARGE_DULUPAY_KEY`；这些变量值不得写入 `skill.md` / `features.json` / 源码 / 构建产物。
+- 推送前必须确认 `.gitignore` 覆盖本地数据与产物：`data/`、`backend/data/`、`input/`、`output/`、`thumbnails/`、`build/`、`dist/`、`dist_electron/`、`.env*` 不得进入 staged diff。
+- 推送前用 `rg -n "AGENT_HMAC_KEY|DULUPAY_KEY|RECHARGE_DEFAULT_ENC|secret|token|password" backend/src src electron features.json skill.md package.json .gitignore` 做一次人工复核；只允许出现空配置、变量名、文档警示，不允许出现真实值。
 
 ### 21.6 开发环境注意事项
 
@@ -6732,3 +6742,76 @@ const baseY = srcY + srcH / 2 - groupH / 2;
 关键代码：`rightwardScanSingle` / `rightwardScanBatch`（nodePlacement.ts）。
 
 ---
+
+### v1.2.10.9 · 算力充值系统迁移
+
+**目标**：把 `gpt-image-2-web` 已跑通的充值系统迁移到 `T8-penguin-canvas`，保留原支付代理协议与安全边界，同时适配本项目 Express + React + Electron 的结构。
+
+**后端落点**：
+- 新增 `backend/src/routes/recharge.js`，挂载 `server.js` 的 `/api/recharge/*` 与 `/pay/*`
+- 原迁移版复用源项目 `ZZENC1` 加密代理配置；v1.2.10.11 起公开仓库默认留空，私有运行只从环境变量读取 `AGENT_BASE_URL / AGENT_HMAC_KEY`
+- HMAC 请求头保持源项目协议：`X-Device-Id / X-Timestamp / X-Nonce / X-Sign`
+- 本项目不用 sqlite，改为 `data/recharge.json` 与 `data/.recharge_device_id`，避免 Electron 原生依赖与打包风险
+- 支持绑定用户、档位列表、创建订单、支付通知、主动查单、订单记录、转移失败重试
+
+**档位**：
+- 临时测试档：`test_1cny`，1 CP，1.00 CNY，方便联调，正式发布前可删除
+- 正式档位沿用源项目：20 / 30 / 50 / 100 / 200 / 300 / 500 CP
+- 1 CP = 500000 quota；正式档价格仍按 1.35 CNY / CP
+- 余额查询本轮暂不迁移
+
+**前端落点**：
+- 新增 `src/components/RechargeModal.tsx`
+- `src/services/api.ts` 新增 recharge API 类型与请求函数
+- `src/App.tsx` 顶部工具条新增「充值」入口
+- UI 分四套视觉分支适配：`tech/light`、`tech/dark`、`pixel/light`、`pixel/dark`
+
+**打包注意**：
+- `electron/_post_build.cjs` 已加入 `routes/recharge.t8c` 必检项
+- 任何 `backend/src/` 改动后，正式打包前必须重新执行 `npm run encrypt`
+- 版本同步为 display `1.2.10.9`，package semver `1.2.1009`
+
+---
+
+### v1.2.10.10 · 充值确认弹窗 + 安全硬化
+
+**用户反馈**：点击「创建订单并付款」前需要一个同主题确认窗口，醒目提示用户核对绑定 ID，避免充错账号。
+
+**前端修复**：
+- `RechargeModal.tsx` 新增二次确认 `alertdialog`
+- 文案固定为：`请核对绑定的用户ID，一旦充错无法退回！`
+- 弹窗展示绑定用户 ID / 套餐 / 金额，用户点「我已核对，继续付款」后才调用 `createRechargeOrder`
+- 适配四主题：科技风深/浅色 + 像素风深/浅色
+
+**后端安全硬化**：
+- `server.js` 的 CORS 从全开放改为仅允许 `127.0.0.1` / `localhost` 来源或无 Origin 请求
+- `recharge.js` 的 `/pay/notify` 在缺少 `DULUPAY_KEY` 时直接返回 `fail`，避免空密钥签名被伪造
+- 订单号随机后缀从 3 bytes 提升到 8 bytes
+- `GET /api/recharge/order/:orderId` 与 `/api/recharge/orders` 返回订单摘要，不回传 `trade_no`
+
+**开源风险补记**：
+- `RECHARGE_DEFAULT_ENC` 属于可逆混淆，不应作为开源项目的真正密钥保护方案
+- 仓库公开时必须保持 `RECHARGE_DEFAULT_ENC = ''`，并轮换任何曾经进入客户端或提交记录的 agent HMAC key
+- 长期方案：VPS agent 提供受限公开下单/查单接口，转账和支付平台密钥只留在 VPS，不进入桌面端源码或打包产物
+
+---
+
+### v1.2.10.11 · GitHub 推送密钥清理规则
+
+**用户要求**：追加 `skill.md` 规则，之后每次推送 GitHub 都必须保证充值系统不泄露 agent HMAC key，公开仓库默认留空。
+
+**代码落地**：
+- `backend/src/routes/recharge.js` 的 `RECHARGE_DEFAULT_ENC` 改为空字符串
+- `loadRechargeConfig()` 仅从环境变量读取私有充值配置：`RECHARGE_AGENT_BASE_URL`、`RECHARGE_AGENT_HMAC_KEY`、`RECHARGE_WEBSITE_URL`、`RECHARGE_DULUPAY_KEY`
+- 缺少 `RECHARGE_AGENT_HMAC_KEY` 时创建订单会返回 agent 未配置，不会用空密钥继续签名
+
+**每次推送 GitHub 前必须执行**：
+- 确认 `RECHARGE_DEFAULT_ENC = ''`，真实 HMAC / 支付密钥不得出现在源码、文档、JSON、构建产物中
+- `rg -n "AGENT_HMAC_KEY|DULUPAY_KEY|RECHARGE_DEFAULT_ENC|secret|token|password" backend/src src electron features.json skill.md package.json .gitignore`，只允许出现变量名、空配置和安全说明
+- `git status --short` 确认没有 `data/`、`backend/data/`、`input/`、`output/`、`thumbnails/`、`build/`、`dist/`、`dist_electron/`、`.env*`
+- `backend/src/` 有改动时，打包前重新 `npm run encrypt`；但 `build/backend-enc` 只用于本地打包验证，不推 GitHub
+- 禁止 `git push --force`，推送前先看 `git diff --stat`
+
+**私有部署说明**：
+- 私有环境通过进程环境变量注入充值配置，示例变量名可写入部署文档，但真实值只能存在本机/服务器 Secret 管理中
+- 若任何真实 HMAC 曾经出现在开源提交、日志、截图或压缩包中，必须立即轮换

@@ -74,6 +74,7 @@ function main() {
   checkFile(path.join(RES, 'backend-enc', 'routes', 'proxy.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'routes', 'files.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'routes', 'imageOps.t8c'));
+  checkFile(path.join(RES, 'backend-enc', 'routes', 'recharge.t8c'));
 
   console.log('\n[2] 前端 dist:');
   checkFile(path.join(RES, 'frontend', 'index.html'));
