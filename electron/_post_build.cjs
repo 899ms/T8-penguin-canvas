@@ -188,6 +188,8 @@ function main() {
   checkFile(path.join(RES, 'backend-enc', 'routes', 'resources.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'routes', 'themes.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'routes', 'eagle.t8c'));
+  checkFile(path.join(RES, 'backend-enc', 'providers', 'registry.t8c'));
+  checkFile(path.join(RES, 'backend-enc', 'providers', 'mediaResolver.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'utils', 'duckPayload.t8c'));
 
   console.log('\n[2] 前端 dist:');
