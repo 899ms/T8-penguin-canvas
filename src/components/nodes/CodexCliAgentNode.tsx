@@ -48,7 +48,7 @@ import {
   filterExcludedMaterials,
   normalizeExcludedMaterialIds,
 } from '../../utils/materialExclusion';
-import { createReadableStudioPalette } from '../../utils/readableStudioPalette';
+import { createReadableStudioPalette, readableTextOn } from '../../utils/readableStudioPalette';
 import MaterialPreviewSection from './MaterialPreviewSection';
 import MentionPromptInput from './MentionPromptInput';
 import SmartImage from '../SmartImage';
@@ -91,6 +91,17 @@ interface CodexStudioSession {
   messages?: CodexAgentMessage[];
   artifacts?: CodexAgentArtifact[];
   versions?: CodexVersionEntry[];
+  contextSummary?: string;
+  contextCompressedCount?: number;
+  contextLimit?: number;
+}
+
+interface CodexStudioMemoryContext {
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  summary: string;
+  compressedCount: number;
+  compressedNow: number;
+  contextLimit: number;
 }
 
 interface CreatorPreset {
@@ -136,6 +147,11 @@ const CODEX_MODEL_OPTIONS = [
   { value: 'gpt-5.3-codex', label: 'GPT-5.3 Codex（旧版）', hint: 'Codex 旧模型；官方已提示 ChatGPT 登录下不推荐继续使用。' },
   { value: 'gpt-5.2', label: 'GPT-5.2（旧版）', hint: 'Codex 旧模型；保留给已有 API/脚本兼容。' },
   { value: 'custom', label: '自定义模型', hint: '手动填写任意 Codex CLI 支持的模型 ID' },
+];
+
+const CODEX_RUN_INTENT_OPTIONS: Array<{ id: Exclude<CodexRunIntent, 'auto'>; label: string; title: string }> = [
+  { id: 'llm', label: 'LLM', title: '只做文字回答、读图分析和提示词整理，绝不生成图片。' },
+  { id: 'img', label: 'IMG', title: '允许调用 image_generation，面向直接生图。' },
 ];
 
 const CODEX_IMAGEGEN_PARAM_LISTS = [
@@ -264,6 +280,9 @@ const MAX_MESSAGES = 120;
 const MAX_ARTIFACTS = 80;
 const MAX_VERSIONS = 80;
 const MAX_DELETED_ARTIFACT_KEYS = 600;
+const CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT = 30;
+const CODEX_STUDIO_CONTEXT_MAX_LIMIT = 80;
+const CODEX_STUDIO_CONTEXT_SUMMARY_MAX_CHARS = 3600;
 const DEFAULT_CREATOR_CATEGORY = '未分类';
 const NO_CREATOR_PRESET_ID = '__none__';
 const LLM_DEFAULT_CODEX_MODEL = 'gpt-5.4-mini';
@@ -489,6 +508,14 @@ function isImageGenerationSkillName(name: string) {
   return /^(imagegen|imagen|image-generation|image_generation|generate-image)$/i.test(normalizeSkillKey(name));
 }
 
+function findDefaultImageGenerationSkill(skills: CodexSkill[]) {
+  return (
+    skills.find((skill) => normalizeSkillKey(skill.name) === 'imagegen') ||
+    skills.find((skill) => isImageGenerationSkillName(skill.name)) ||
+    null
+  );
+}
+
 function normalizeCodexRunIntent(value: any): Exclude<CodexRunIntent, 'auto'> {
   return value === 'img' ? 'img' : 'llm';
 }
@@ -674,6 +701,7 @@ function sanitizeStudioSessions(value: any, fallbackId = 'session'): CodexStudio
       const messages = sanitizeMessages(item?.messages);
       const artifacts = sanitizeArtifacts(item?.artifacts);
       const versions = sanitizeVersions(item?.versions);
+      const contextSummary = String(item?.contextSummary || '').trim();
       return {
         id,
         title: String(item?.title || deriveSessionTitle(messages, '新会话')).trim() || '新会话',
@@ -683,6 +711,9 @@ function sanitizeStudioSessions(value: any, fallbackId = 'session'): CodexStudio
         messages,
         artifacts,
         versions,
+        contextSummary,
+        contextCompressedCount: clampInteger(item?.contextCompressedCount, 0, 0, MAX_MESSAGES),
+        contextLimit: clampInteger(item?.contextLimit, CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT, 0, CODEX_STUDIO_CONTEXT_MAX_LIMIT),
       };
     })
     .filter((item): item is CodexStudioSession => !!item)
@@ -697,6 +728,9 @@ function sanitizeStudioSessions(value: any, fallbackId = 'session'): CodexStudio
     messages: [],
     artifacts: [],
     versions: [],
+    contextSummary: '',
+    contextCompressedCount: 0,
+    contextLimit: CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT,
   }];
 }
 
@@ -897,6 +931,23 @@ function shouldStoreTextArtifact(textValue: string, preset: CreatorPreset, gener
   return true;
 }
 
+function selectAutoPublishArtifact(
+  generatedArtifacts: CodexAgentArtifact[],
+  runIntent: CodexRunIntent,
+  fallback: CodexAgentArtifact | null,
+) {
+  const ordered = generatedArtifacts.filter(Boolean);
+  if (runIntent === 'img') {
+    return [...ordered].reverse().find((artifact) => artifact.kind === 'image') ||
+      [...ordered].reverse().find((artifact) => artifact.kind !== 'text') ||
+      fallback;
+  }
+  if (runIntent === 'llm') {
+    return [...ordered].reverse().find((artifact) => artifact.kind === 'text') || fallback;
+  }
+  return fallback;
+}
+
 function stopCopyableConversationEvent(event: any) {
   event.stopPropagation?.();
   event.nativeEvent?.stopImmediatePropagation?.();
@@ -905,6 +956,12 @@ function stopCopyableConversationEvent(event: any) {
 function settingsValue(value: any, fallback = '') {
   const text = String(value || '').trim();
   return text || fallback;
+}
+
+function clampInteger(value: any, fallback: number, min: number, max: number) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(numeric)));
 }
 
 const codexLoginCommand = 'codex login';
@@ -933,6 +990,70 @@ function clearRecoverableCodexError(message: any) {
 function textPreview(text: string, length = 120) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   return clean.length > length ? `${clean.slice(0, length)}...` : clean;
+}
+
+function trimCodexStudioMemorySummary(value: string) {
+  const text = String(value || '').trim();
+  if (text.length <= CODEX_STUDIO_CONTEXT_SUMMARY_MAX_CHARS) return text;
+  const trimmed = text.slice(-CODEX_STUDIO_CONTEXT_SUMMARY_MAX_CHARS);
+  return trimmed.replace(/^[\s\S]*?(?=\n- )/, '').trim() || trimmed.trim();
+}
+
+function codexStudioMemoryMessages(history: CodexAgentMessage[]) {
+  return sanitizeMessages(history)
+    .filter((item) => (item.role === 'user' || item.role === 'assistant') && item.status !== 'running')
+    .map((item) => ({
+      role: item.role as 'user' | 'assistant',
+      content: String(item.content || '').trim(),
+    }))
+    .filter((item) => item.content && !/^Codex 任务已停止$/i.test(item.content));
+}
+
+function summarizeCodexStudioMemoryChunk(messages: Array<{ role: 'user' | 'assistant'; content: string }>) {
+  return messages
+    .map((item) => `- ${item.role === 'user' ? '用户' : 'Codex'}：${textPreview(item.content, 420)}`)
+    .join('\n');
+}
+
+function mergeCodexStudioMemorySummary(previousSummary: string, newlyCompressed: Array<{ role: 'user' | 'assistant'; content: string }>) {
+  const previous = String(previousSummary || '').trim();
+  const nextChunk = summarizeCodexStudioMemoryChunk(newlyCompressed);
+  return trimCodexStudioMemorySummary([previous, nextChunk].filter(Boolean).join('\n'));
+}
+
+function buildCodexStudioMemoryContext(
+  history: CodexAgentMessage[],
+  options: { contextLimit?: number; summary?: string; compressedCount?: number } = {},
+): CodexStudioMemoryContext {
+  const contextLimit = clampInteger(options.contextLimit, CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT, 0, CODEX_STUDIO_CONTEXT_MAX_LIMIT);
+  const historyMessages = codexStudioMemoryMessages(history);
+  const previousSummary = String(options.summary || '').trim();
+  const previousCompressedCount = clampInteger(options.compressedCount, 0, 0, historyMessages.length);
+  const targetCompressedCount = contextLimit <= 0 ? historyMessages.length : Math.max(0, historyMessages.length - contextLimit);
+  const normalizedCompressedCount = Math.min(previousCompressedCount, targetCompressedCount);
+  const newlyCompressed = historyMessages.slice(normalizedCompressedCount, targetCompressedCount);
+  const summary = newlyCompressed.length ? mergeCodexStudioMemorySummary(previousSummary, newlyCompressed) : previousSummary;
+  const messages = contextLimit <= 0 ? [] : historyMessages.slice(-contextLimit);
+  return {
+    messages,
+    summary,
+    compressedCount: targetCompressedCount,
+    compressedNow: newlyCompressed.length,
+    contextLimit,
+  };
+}
+
+function buildCodexStudioMemoryPrompt(memory: CodexStudioMemoryContext) {
+  const summary = String(memory.summary || '').trim();
+  const recent = memory.messages
+    .map((item) => `${item.role === 'user' ? '用户' : 'Codex'}：${item.content}`)
+    .join('\n\n');
+  if (!summary && !recent) return '';
+  return [
+    '本轮创作台会话记忆：以下内容来自同一个 Codex 创作台会话，请作为连续记忆使用，不要把它当成用户刚刚输入。',
+    summary ? `长期压缩记忆：\n${summary}` : '',
+    recent ? `最近 ${memory.messages.length} 条对话：\n${recent}` : '',
+  ].filter(Boolean).join('\n\n');
 }
 
 async function saveArtifactToResourceLibrary(artifact: CodexAgentArtifact, nodeId: string): Promise<string> {
@@ -1069,6 +1190,8 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     () => creatorSkills.filter((skill) => selectedRunnableSkillNames.includes(skill.name)),
     [creatorSkills, selectedRunnableSkillKey],
   );
+  const defaultImageGenerationSkill = useMemo(() => findDefaultImageGenerationSkill(creatorSkills), [creatorSkills]);
+  const codexAutoImagegenSkillName = String(d.codexAutoImagegenSkillName || '').trim();
   const hasLegacyCustomCodexModel = settingsValue(d.codexModelMode, '') === 'custom' && Boolean(String(d.codexModel || '').trim());
   const codexModelManual = d.codexModelManual === true || hasLegacyCustomCodexModel;
   const autoCodexModelMode = autoCodexModelForRunIntent(codexRunIntent);
@@ -1087,6 +1210,14 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
   const persistMaterials = d.codexPersistMaterials === true;
   const statusText = String(d.status || 'idle');
   const isBusy = ['running', 'streaming', 'submitting'].includes(statusText);
+  const codexStudioMemorySettings = useMemo(() => ({
+    contextSummary: String(d.codexContextSummary || '').trim(),
+    contextCompressedCount: clampInteger(d.codexContextCompressedCount, 0, 0, MAX_MESSAGES),
+    contextLimit: clampInteger(d.codexContextLimit, CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT, 0, CODEX_STUDIO_CONTEXT_MAX_LIMIT),
+  }), [d.codexContextCompressedCount, d.codexContextLimit, d.codexContextSummary]);
+  const codexContextSummary = codexStudioMemorySettings.contextSummary;
+  const codexContextCompressedCount = codexStudioMemorySettings.contextCompressedCount;
+  const codexContextLimit = codexStudioMemorySettings.contextLimit;
   const messages = useMemo(() => sanitizeMessages(d.codexMessages), [d.codexMessages]);
   const deletedArtifactKeys = useMemo(() => sanitizeDeletedArtifactKeys(d.codexDeletedArtifactKeys), [d.codexDeletedArtifactKeys]);
   const artifacts = useMemo(
@@ -1109,18 +1240,27 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       messages,
       artifacts,
       versions,
+      contextSummary: codexContextSummary,
+      contextCompressedCount: codexContextCompressedCount,
+      contextLimit: codexContextLimit,
     };
     const next = [current, ...codexStudioSessions.filter((item) => item.id !== activeStudioSessionId)];
     return next.slice(0, 24);
-  }, [activeStudioSessionId, artifacts, codexStudioSessions, messages, versions]);
+  }, [activeStudioSessionId, artifacts, codexContextCompressedCount, codexContextLimit, codexContextSummary, codexStudioSessions, messages, versions]);
   const messagesRef = useRef<CodexAgentMessage[]>(messages);
   const artifactsRef = useRef<CodexAgentArtifact[]>(artifacts);
   const versionsRef = useRef<CodexVersionEntry[]>(versions);
   const deletedArtifactKeysRef = useRef<string[]>(deletedArtifactKeys);
+  const codexContextSummaryRef = useRef(codexContextSummary);
+  const codexContextCompressedCountRef = useRef(codexContextCompressedCount);
+  const codexContextLimitRef = useRef(codexContextLimit);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   useEffect(() => { artifactsRef.current = artifacts; }, [artifacts]);
   useEffect(() => { versionsRef.current = versions; }, [versions]);
   useEffect(() => { deletedArtifactKeysRef.current = deletedArtifactKeys; }, [deletedArtifactKeys]);
+  useEffect(() => { codexContextSummaryRef.current = codexContextSummary; }, [codexContextSummary]);
+  useEffect(() => { codexContextCompressedCountRef.current = codexContextCompressedCount; }, [codexContextCompressedCount]);
+  useEffect(() => { codexContextLimitRef.current = codexContextLimit; }, [codexContextLimit]);
   useEffect(() => {
     setSelectedArtifactIds((current) => current.filter((artifactId) => artifacts.some((artifact) => artifact.id === artifactId)));
   }, [artifacts]);
@@ -1171,6 +1311,26 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     if (selectedSkillKey === selectedRunnableSkillKey) return;
     update({ codexSelectedSkillNames: selectedRunnableSkillNames });
   }, [creatorSkills.length, selectedRunnableSkillKey, selectedRunnableSkillNames, selectedSkillKey, update]);
+
+  useEffect(() => {
+    if (!codexAutoImagegenSkillName) return;
+    if (!selectedRunnableSkillNames.includes(codexAutoImagegenSkillName)) {
+      update({ codexAutoImagegenSkillName: '' });
+      return;
+    }
+    if (codexRunIntent === 'llm' && codexAutoImagegenSkillName) {
+      update({
+        codexSelectedSkillNames: selectedRunnableSkillNames.filter((name) => name !== codexAutoImagegenSkillName),
+        codexAutoImagegenSkillName: '',
+      });
+    }
+  }, [
+    codexAutoImagegenSkillName,
+    codexRunIntent,
+    selectedRunnableSkillKey,
+    selectedRunnableSkillNames,
+    update,
+  ]);
 
   const upstream = useUpstreamMaterials(id);
   const excludedMaterialIds = useMemo(
@@ -1256,7 +1416,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
   const studioHeaderText = readablePalette.headerText;
   const studioHeaderSubText = readablePalette.headerSubText;
   const studioSurfaceStrongText = readablePalette.surfaceStrongText;
-  const activeControlText = studioAccentText;
+  const activeControlText = readableTextOn(accent, isDark);
   const inactiveControlText = readablePalette.controlText;
   const inactiveControlBg = readablePalette.controlBg;
 
@@ -1276,6 +1436,17 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     background: surface,
     color: text,
     borderRadius: isPixel ? 6 : 10,
+  };
+
+  const segmentedControlButtonStyle = (active: boolean): CSSProperties => {
+    const controlBg = active ? accent : inactiveControlBg;
+    return {
+      border: `1px solid ${active ? accent : border}`,
+      background: controlBg,
+      color: active ? activeControlText : readableTextOn(controlBg, isDark),
+      borderRadius: isPixel ? 6 : 10,
+      boxShadow: active ? '0 1px 0 rgba(0,0,0,0.28)' : undefined,
+    };
   };
 
   const appendImagegenQuickParam = useCallback((value: string) => {
@@ -1706,6 +1877,9 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     messages: messagesRef.current,
     artifacts: artifactsRef.current,
     versions: versionsRef.current,
+    contextSummary: codexContextSummaryRef.current,
+    contextCompressedCount: codexContextCompressedCountRef.current,
+    contextLimit: codexContextLimitRef.current,
   }), [activeStudioSessionId]);
 
   const newCodexStudioSession = useCallback(() => {
@@ -1720,16 +1894,24 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       messages: [],
       artifacts: [],
       versions: [],
+      contextSummary: '',
+      contextCompressedCount: 0,
+      contextLimit: codexContextLimitRef.current,
     };
     messagesRef.current = [];
     artifactsRef.current = [];
     versionsRef.current = [];
+    codexContextSummaryRef.current = '';
+    codexContextCompressedCountRef.current = 0;
     update({
       codexStudioSessions: [current, nextSession, ...codexStudioSessions.filter((item) => item.id !== current.id)].slice(0, 24),
       codexActiveStudioSessionId: nextId,
       codexMessages: [],
       codexArtifacts: [],
       codexVersions: [],
+      codexContextSummary: '',
+      codexContextCompressedCount: 0,
+      codexContextLimit: codexContextLimitRef.current,
       lastArtifactId: '',
       lastPublishedArtifactId: '',
       status: 'idle',
@@ -1771,17 +1953,26 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     const nextArtifacts = filterDeletedArtifacts(sanitizeArtifacts(target.artifacts), deletedArtifactKeysRef.current);
     const nextArtifactIds = new Set(nextArtifacts.map((artifact) => artifact.id));
     const nextVersions = sanitizeVersions(target.versions).filter((version) => nextArtifactIds.has(version.artifactId));
+    const nextContextSummary = String(target.contextSummary || '').trim();
+    const nextContextCompressedCount = clampInteger(target.contextCompressedCount, 0, 0, MAX_MESSAGES);
+    const nextContextLimit = clampInteger(target.contextLimit, CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT, 0, CODEX_STUDIO_CONTEXT_MAX_LIMIT);
     messagesRef.current = nextMessages;
     artifactsRef.current = nextArtifacts;
     versionsRef.current = nextVersions;
+    codexContextSummaryRef.current = nextContextSummary;
+    codexContextCompressedCountRef.current = nextContextCompressedCount;
+    codexContextLimitRef.current = nextContextLimit;
     update({
       codexStudioSessions: savedSessions.map((item) => item.id === targetId
-        ? { ...target, messages: nextMessages, artifacts: nextArtifacts, versions: nextVersions }
+        ? { ...target, messages: nextMessages, artifacts: nextArtifacts, versions: nextVersions, contextSummary: nextContextSummary, contextCompressedCount: nextContextCompressedCount, contextLimit: nextContextLimit }
         : item).slice(0, 24),
       codexActiveStudioSessionId: targetId,
       codexMessages: nextMessages,
       codexArtifacts: nextArtifacts,
       codexVersions: nextVersions,
+      codexContextSummary: nextContextSummary,
+      codexContextCompressedCount: nextContextCompressedCount,
+      codexContextLimit: nextContextLimit,
       lastArtifactId: nextArtifacts[nextArtifacts.length - 1]?.id || '',
       status: 'idle',
       error: '',
@@ -1814,7 +2005,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       logBus.warn('请填写任务，或连接上游图片/视频/音频素材。', `codex:${id}`);
       return;
     }
-    const runIntent: CodexRunIntent = studioOpen ? codexRunIntent : 'auto';
+    const runIntent: CodexRunIntent = codexRunIntent;
     const slashSkillNames = extractSlashSkillReferences(quickPrompt, creatorSkills);
     const rawSkillNamesForRun = Array.from(new Set([...selectedRunnableSkillNames, ...slashSkillNames]));
     const selectedSkillNamesForRun = runIntent === 'llm'
@@ -1835,6 +2026,12 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       ? buildPresetInstructionBlock(runPreset, forceImageGeneration)
       : runPreset.systemHint;
     const runMode = forceImageGeneration ? 'image' : runPreset.mode;
+    const studioMemory = studioOpen ? buildCodexStudioMemoryContext(messagesRef.current, {
+      contextLimit: codexContextLimit,
+      summary: codexContextSummary,
+      compressedCount: codexContextCompressedCount,
+    }) : null;
+    const studioMemoryPrompt = studioMemory ? buildCodexStudioMemoryPrompt(studioMemory) : '';
 
     abortRef.current?.abort();
     const controller = new AbortController();
@@ -1866,8 +2063,19 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       codexMode: runMode,
       codexPresetId: hasActiveCreatorPreset ? runPreset.id : NO_CREATOR_PRESET_ID,
       codexPreset: hasActiveCreatorPreset ? runPreset.label : '',
-      codexSelectedSkillNames: selectedRunnableSkillNames,
+      codexSelectedSkillNames: selectedSkillNamesForRun,
     };
+    if (runIntent === 'img' && defaultImageGenerationSkill && selectedSkillNamesForRun.includes(defaultImageGenerationSkill.name)) {
+      startPatch.codexAutoImagegenSkillName = defaultImageGenerationSkill.name;
+    }
+    if (studioMemory) {
+      codexContextSummaryRef.current = studioMemory.summary;
+      codexContextCompressedCountRef.current = studioMemory.compressedCount;
+      codexContextLimitRef.current = studioMemory.contextLimit;
+      startPatch.codexContextSummary = studioMemory.summary;
+      startPatch.codexContextCompressedCount = studioMemory.compressedCount;
+      startPatch.codexContextLimit = studioMemory.contextLimit;
+    }
     if (studioOpen) startPatch.codexRunIntent = codexRunIntent;
     if (!persistPrompt) startPatch.codexQuickPrompt = '';
     if (!persistPrompt || !persistMaterials) startPatch.codexQuickPromptMentions = [];
@@ -1909,6 +2117,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
           presetInstruction,
           runIntent === 'llm' ? '本轮为 LLM 文字模式：即使连接了参考图片，也只能分析、回答、整理提示词或给出创作方案；不要生成图片文件，不要调用 image_generation。' : '',
           forceImageGeneration ? '本轮为 IMG 生图模式：优先直接生成图片产物，不要只输出提示词文本。' : '',
+          studioMemoryPrompt,
           creatorBrief,
           promptForRun,
         ].filter(Boolean).join('\n\n'),
@@ -1941,7 +2150,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
             const msg = String(event.message || event.text || '').trim();
             if (shouldDisplayCodexToolMessage(event, msg)) appendToolMessage(msg);
           }
-          if (event.artifact) addArtifact(event.artifact);
+          if (event.artifact) addArtifact({ ...event.artifact, turnId });
         },
       });
 
@@ -1974,8 +2183,12 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       } else {
         replaceAssistant('Codex 已完成任务，但没有返回文本。请查看产物库或运行日志。', 'success');
       }
-      const latest = nextArtifacts[nextArtifacts.length - 1] || artifactsRef.current[artifactsRef.current.length - 1];
-      if (latest && autoPublishOutput) publishArtifact(latest);
+      const runArtifactsForPublish = nextArtifacts.length
+        ? nextArtifacts
+        : artifactsRef.current.filter((artifact) => artifact.turnId === turnId);
+      const latest = runArtifactsForPublish[runArtifactsForPublish.length - 1] || artifactsRef.current[artifactsRef.current.length - 1];
+      const autoPublishArtifact = selectAutoPublishArtifact(runArtifactsForPublish, runIntent, latest);
+      if (autoPublishArtifact && autoPublishOutput) publishArtifact(autoPublishArtifact);
       const finishPatch: Record<string, any> = {};
       if (!persistPrompt) finishPatch.codexQuickPrompt = '';
       if (!persistPrompt || !persistMaterials) finishPatch.codexQuickPromptMentions = [];
@@ -1992,8 +2205,8 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       update({
         status: 'success',
         error: '',
-        codexLastRunSummary: latest
-          ? `${artifactKindLabel(latest.kind)} 已生成${autoPublishOutput ? '，已发布到画布输出' : '，可手动发布'}`
+        codexLastRunSummary: (autoPublishArtifact || latest)
+          ? `${artifactKindLabel((autoPublishArtifact || latest)!.kind)} 已生成${autoPublishOutput ? '，已发布到画布输出' : '，可手动发布'}`
           : 'Codex 任务完成',
         ...finishPatch,
       });
@@ -2013,6 +2226,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     allCreatorPresets,
     creatorSkills,
     currentPreset,
+    defaultImageGenerationSkill,
     d.codexApprovalPolicy,
     d.codexAspectRatio,
     d.codexAutoNegativePrompt,
@@ -2052,6 +2266,9 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
     quickPrompt,
     quickPromptMentions,
     codexRunIntent,
+    codexContextCompressedCount,
+    codexContextLimit,
+    codexContextSummary,
     selectedRunnableSkillNames,
     selectedCodexModel,
     sessionId,
@@ -2459,6 +2676,84 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
       </div>
     );
   };
+
+  const updateCodexRunIntent = useCallback((nextIntent: Exclude<CodexRunIntent, 'auto'>) => {
+    const patch: Record<string, any> = {
+      codexRunIntent: nextIntent,
+      ...(codexModelManual ? {} : codexModelAutoPatchForRunIntent(nextIntent)),
+    };
+    if (
+      nextIntent === 'img' &&
+      defaultImageGenerationSkill &&
+      !selectedRunnableSkillNames.includes(defaultImageGenerationSkill.name)
+    ) {
+      patch.codexSelectedSkillNames = [...selectedRunnableSkillNames, defaultImageGenerationSkill.name];
+      patch.codexAutoImagegenSkillName = defaultImageGenerationSkill.name;
+    }
+    if (nextIntent === 'llm' && codexAutoImagegenSkillName) {
+      patch.codexSelectedSkillNames = selectedRunnableSkillNames.filter((name) => name !== codexAutoImagegenSkillName);
+      patch.codexAutoImagegenSkillName = '';
+    }
+    update(patch);
+  }, [codexAutoImagegenSkillName, codexModelManual, defaultImageGenerationSkill, selectedRunnableSkillNames, update]);
+
+  const renderRunIntentToggle = (placement: 'simple' | 'studio') => (
+    <div
+      className="grid grid-cols-2 gap-1 rounded-xl border p-1"
+      style={{ borderColor: accent, background: isDark ? 'rgba(8,13,28,0.72)' : bg, boxShadow: isPixel ? undefined : `inset 0 0 0 1px ${isDark ? 'rgba(56,189,248,0.16)' : 'rgba(2,132,199,0.08)'}` }}
+      data-codex-run-intent={codexRunIntent}
+      data-codex-simple-run-intent={placement === 'simple' ? codexRunIntent : undefined}
+    >
+      {CODEX_RUN_INTENT_OPTIONS.map((item) => {
+        const active = codexRunIntent === item.id;
+        const intentLabel = item.id === 'img' ? '生图模式' : '文字模式';
+        return (
+          <button
+            key={`${placement}-${item.id}`}
+            type="button"
+            aria-pressed={active}
+            data-codex-run-intent-option={item.id}
+            data-codex-run-intent-active={active ? 'true' : 'false'}
+            className="nodrag flex min-h-[42px] flex-col items-center justify-center rounded-lg border px-3 py-1.5 text-xs font-black transition"
+            style={{
+              ...segmentedControlButtonStyle(active),
+              outline: active ? `2px solid ${accent}` : '1px solid transparent',
+              outlineOffset: active ? 1 : 0,
+              transform: active ? 'translateY(-1px)' : undefined,
+              boxShadow: active
+                ? isPixel
+                  ? '2px 2px 0 var(--px-ink)'
+                  : `0 0 0 2px ${isDark ? 'rgba(56,189,248,0.22)' : 'rgba(2,132,199,0.16)'}, 0 8px 18px rgba(0,0,0,0.18)`
+                : 'none',
+            }}
+            onClick={() => {
+              const nextIntent = item.id;
+              updateCodexRunIntent(nextIntent);
+            }}
+            title={item.title}
+          >
+            <span className="inline-flex items-center justify-center gap-1 leading-none">
+              {active && <CheckCircle2 size={13} strokeWidth={3} />}
+              <span>{item.label}</span>
+              {active && (
+                <span
+                  className="rounded-full border px-1.5 py-0.5 text-[9px] font-black leading-none"
+                  style={{
+                    borderColor: isDark ? 'rgba(255,255,255,0.42)' : 'rgba(15,23,42,0.22)',
+                    background: isDark ? 'rgba(8,13,28,0.78)' : 'rgba(255,255,255,0.88)',
+                    color: accent,
+                  }}
+                >
+                  当前
+                </span>
+              )}
+            </span>
+            <span className="mt-0.5 text-[10px] font-bold leading-none opacity-80">{intentLabel}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 
   const renderModelPicker = (compact = false) => (
     <div className={compact ? 'grid min-w-0 gap-1.5' : 'grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2'}>
@@ -3203,6 +3498,31 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
                   <span>@ 产物</span>
                   <span>{artifactMaterials.length}</span>
                 </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>记忆条数</span>
+                  <span>{codexContextLimit} / {CODEX_STUDIO_CONTEXT_MAX_LIMIT}</span>
+                </div>
+              </div>
+              <label className="mt-3 grid gap-1 text-[11px] font-bold" style={{ color: subText }}>
+                创作台记忆
+                <input
+                  className="nodrag w-full rounded-lg border px-2 py-1.5 text-xs outline-none"
+                  style={{ borderColor: border, background: bg, color: text }}
+                  type="number"
+                  min={0}
+                  max={CODEX_STUDIO_CONTEXT_MAX_LIMIT}
+                  step={1}
+                  value={codexContextLimit}
+                  onChange={(event) => {
+                    const nextLimit = clampInteger(event.currentTarget.value, CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT, 0, CODEX_STUDIO_CONTEXT_MAX_LIMIT);
+                    codexContextLimitRef.current = nextLimit;
+                    update({ codexContextLimit: nextLimit });
+                  }}
+                />
+              </label>
+              <div className="mt-1 rounded-lg border px-2 py-1.5 text-[10px] leading-relaxed" style={{ borderColor: border, background: bg, color: subText }}>
+                超出条数的旧对话会自动压缩成长期记忆；新建会话会清空记忆。
+                {codexContextCompressedCount > 0 && <span> 已压缩 {codexContextCompressedCount} 条历史为长期记忆。</span>}
               </div>
               <button type="button" className="nodrag mt-3 w-full rounded-lg px-3 py-2 text-xs font-black" style={buttonStyle} onClick={() => void refreshStatusAndSkills()}>
                 刷新项目状态
@@ -3299,37 +3619,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <div className="grid grid-cols-2 rounded-xl border p-1" style={{ borderColor: border, background: bg }} data-codex-run-intent={codexRunIntent}>
-                    {([
-                      { id: 'llm', label: 'LLM', title: '只做文字回答、读图分析和提示词整理，绝不生成图片。' },
-                      { id: 'img', label: 'IMG', title: '允许调用 image_generation，面向直接生图。' },
-                    ] as const).map((item) => {
-                      const active = codexRunIntent === item.id;
-                      return (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="nodrag rounded-lg border px-3 py-1.5 text-xs font-black transition"
-                          style={{
-                            borderColor: active ? accent : border,
-                            background: active ? accent : inactiveControlBg,
-                            color: active ? activeControlText : inactiveControlText,
-                            boxShadow: active ? '0 1px 0 rgba(0,0,0,0.28)' : undefined,
-                          }}
-                          onClick={() => {
-                            const nextIntent = item.id;
-                            update({
-                              codexRunIntent: nextIntent,
-                              ...(codexModelManual ? {} : codexModelAutoPatchForRunIntent(nextIntent)),
-                            });
-                          }}
-                          title={item.title}
-                        >
-                          {item.label}
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {renderRunIntentToggle('studio')}
                   {isBusy && (
                     <button
                       type="button"
@@ -3520,7 +3810,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
                     type="button"
                     data-codex-artifact-tab="image"
                     className="nodrag rounded-md px-2 py-1 text-[11px] font-black"
-                    style={{ background: artifactLibraryTab === 'image' ? accent : inactiveControlBg, color: artifactLibraryTab === 'image' ? activeControlText : inactiveControlText, border: `1px solid ${artifactLibraryTab === 'image' ? accent : border}` }}
+                    style={segmentedControlButtonStyle(artifactLibraryTab === 'image')}
                     onClick={() => setArtifactLibraryTab('image')}
                   >
                     图像 {imageArtifacts.length}
@@ -3529,7 +3819,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
                     type="button"
                     data-codex-artifact-tab="text"
                     className="nodrag rounded-md px-2 py-1 text-[11px] font-black"
-                    style={{ background: artifactLibraryTab === 'text' ? accent : inactiveControlBg, color: artifactLibraryTab === 'text' ? activeControlText : inactiveControlText, border: `1px solid ${artifactLibraryTab === 'text' ? accent : border}` }}
+                    style={segmentedControlButtonStyle(artifactLibraryTab === 'text')}
                     onClick={() => setArtifactLibraryTab('text')}
                   >
                     文本 {textArtifacts.length}
@@ -3540,7 +3830,7 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
                 <button
                   type="button"
                   className="nodrag rounded-md px-2 py-1 text-[11px] font-bold"
-                  style={artifactBatchMode ? { ...buttonStyle, background: accent, color: activeControlText, borderColor: accent } : buttonStyle}
+                  style={artifactBatchMode ? segmentedControlButtonStyle(true) : buttonStyle}
                   onClick={() => setArtifactBatchMode((value) => !value)}
                 >
                   {artifactBatchMode ? '退出批量' : '批量'}
@@ -3645,6 +3935,20 @@ const CodexCliAgentNode = ({ id, data, selected }: NodeProps) => {
             <button type="button" className="nodrag rounded-lg p-2" style={buttonStyle} onClick={() => setSettingsOpen((v) => !v)} title="CLI 设置">
               <Settings2 size={16} />
             </button>
+          </div>
+
+          <div
+            className="rounded-xl border p-2"
+            style={{ borderColor: border, background: surface }}
+            data-codex-simple-run-intent={codexRunIntent}
+          >
+            <div className="mb-1 flex min-w-0 items-center justify-between gap-2 px-0.5 text-[11px]" style={{ color: subText }}>
+              <span className="shrink-0 font-black" style={{ color: text }}>运行模式</span>
+              <span className="min-w-0 truncate font-bold" data-codex-run-intent-summary={codexRunIntent} style={{ color: text }}>
+                当前：{codexRunIntent === 'img' ? 'IMG 生图模式 · 默认 gpt-5.5 + imagegen' : 'LLM 文字模式 · 默认 gpt-5.4 mini'}
+              </span>
+            </div>
+            {renderRunIntentToggle('simple')}
           </div>
 
           {renderCompactCreatorControls(true)}

@@ -10,6 +10,8 @@ const { runLocalHooks } = require('../extensions/runtimeHooks');
 const router = express.Router();
 
 const PRIVATE_DISABLED_MESSAGE = 'Grok OAuth 私有模块未启用，请使用带私有模块的本地版本。';
+const GROK_VIDEO_AGENT_POLL_INTERVAL_MS = 5000;
+const GROK_VIDEO_AGENT_MAX_POLLS = 180;
 
 function disabledPayload(extra = {}) {
   return {
@@ -106,6 +108,10 @@ function arrayOf(value) {
   return value ? [value] : [];
 }
 
+function uniqueUrls(...values) {
+  return [...new Set(values.flatMap((value) => arrayOf(value)).map((url) => String(url || '').trim()).filter(Boolean))];
+}
+
 const VIDEO_DONE_STATUSES = new Set(['done', 'completed', 'complete', 'succeeded', 'success', 'finished', 'ready']);
 
 function hasVideoOutput(data = {}) {
@@ -125,9 +131,9 @@ function assertCompletedVideoHasOutput(data = {}) {
 
 async function normalizeMediaOutputs(data = {}) {
   const patch = {};
-  const remoteImageUrls = arrayOf(data.imageUrls || data.images || data.urls).concat(arrayOf(data.imageUrl));
-  const remoteVideoUrls = arrayOf(data.videoUrls || data.videos).concat(arrayOf(data.videoUrl));
-  const remoteAudioUrls = arrayOf(data.audioUrls || data.audios).concat(arrayOf(data.audioUrl));
+  const remoteImageUrls = uniqueUrls(data.imageUrls || data.images || data.urls, data.imageUrl);
+  const remoteVideoUrls = uniqueUrls(data.videoUrls || data.videos, data.videoUrl);
+  const remoteAudioUrls = uniqueUrls(data.audioUrls || data.audios, data.audioUrl);
 
   if (remoteImageUrls.length > 0) {
     patch.remoteImageUrls = remoteImageUrls;
@@ -241,16 +247,16 @@ function endAgentSse(res, result = {}, meta = {}) {
   return endSse(res, result);
 }
 
-function sleep(ms, req) {
+function sleep(ms, res) {
   return new Promise((resolve, reject) => {
-    if (req.destroyed || req.aborted) {
+    if (res.destroyed || res.writableEnded) {
       reject(new Error('client_disconnected'));
       return;
     }
     let settled = false;
     const cleanup = () => {
-      req.off?.('close', onClose);
-      req.removeListener?.('close', onClose);
+      res.off?.('close', onClose);
+      res.removeListener?.('close', onClose);
     };
     const finish = () => {
       if (settled) return;
@@ -266,7 +272,7 @@ function sleep(ms, req) {
       reject(new Error('client_disconnected'));
     };
     const timer = setTimeout(finish, ms);
-    req.once('close', onClose);
+    res.once('close', onClose);
   });
 }
 
@@ -483,18 +489,22 @@ router.post('/agent/stream', async (req, res) => {
         progress: first.progress || 8,
         result: first,
       });
-      for (let i = 0; i < 120; i += 1) {
-        await sleep(3500, req);
+      let lastPoll = first;
+      for (let i = 0; i < GROK_VIDEO_AGENT_MAX_POLLS; i += 1) {
+        await sleep(GROK_VIDEO_AGENT_POLL_INTERVAL_MS, res);
         const poll = await runGrokHook('videoStatus', { body: { ...body, requestId } });
         if (!poll?.handled) throw new Error(PRIVATE_DISABLED_MESSAGE);
         const data = cleanHookData(poll);
         Object.assign(data, await normalizeMediaOutputs(data));
-        const progress = typeof data.progress === 'number' ? data.progress : Math.min(95, 10 + i);
+        lastPoll = data;
+        const progress = typeof data.progress === 'number'
+          ? data.progress
+          : Math.min(95, 10 + Math.round(((i + 1) / GROK_VIDEO_AGENT_MAX_POLLS) * 85));
         sendSse(res, 'tool.progress', {
           ...meta,
           mode,
           requestId,
-          message: data.message || `视频生成中 ${i + 1}/120`,
+          message: data.message || `视频生成中 ${i + 1}/${GROK_VIDEO_AGENT_MAX_POLLS}`,
           progress,
           result: data,
         });
@@ -506,7 +516,9 @@ router.post('/agent/stream', async (req, res) => {
           return endAgentSse(res, data, meta);
         }
       }
-      throw new Error('Grok OAuth 视频生成超时，请稍后到异步任务中查看。');
+      const waitedMinutes = Math.round((GROK_VIDEO_AGENT_MAX_POLLS * GROK_VIDEO_AGENT_POLL_INTERVAL_MS) / 60000);
+      const lastStatus = lastPoll?.status || lastPoll?.state || lastPoll?.phase || lastPoll?.message || '未知';
+      throw new Error(`Grok OAuth 视频生成超时（已等待约 ${waitedMinutes} 分钟，requestId: ${requestId}，最后状态：${lastStatus}）。请稍后重试或用任务 ID 查询。`);
     }
 
     throw new Error(`不支持的 Grok OAuth Agent 模式：${mode}`);

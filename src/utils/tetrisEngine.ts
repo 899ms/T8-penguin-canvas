@@ -1,6 +1,26 @@
 export const TETRIS_WIDTH = 10;
 export const TETRIS_HEIGHT = 20;
-export const TETRIS_PIECES = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] as const;
+export const TETRIS_BASE_FALL_INTERVAL_MS = 880;
+export const TETRIS_MAX_SPEED_MULTIPLIER = 2;
+export const TETRIS_MAX_POWER_COST_MULTIPLIER = 1.5;
+export const TETRIS_FINAL_CLEAR_LINES = 990;
+export const TETRIS_PIECES = [
+  'I',
+  'O',
+  'T',
+  'S',
+  'Z',
+  'J',
+  'L',
+  'DOT',
+  'DOMINO',
+  'TRIO',
+  'BAR4',
+  'CORNER',
+  'PLUS',
+  'STAIR',
+  'HOOK',
+] as const;
 
 export type TetrisPieceType = typeof TETRIS_PIECES[number];
 export type TetrisRotation = 0 | 1 | 2 | 3;
@@ -12,6 +32,7 @@ export interface TetrisCell {
   active?: boolean;
   ghost?: boolean;
   modifier?: TetrisCellModifier;
+  hazard?: boolean;
 }
 
 export type TetrisBoard = Array<Array<TetrisCell | null>>;
@@ -242,6 +263,32 @@ export const TETRIS_CHECKPOINT_STEP = 5;
 
 type Coord = readonly [number, number];
 
+function normalizeShape(cells: Coord[]): Coord[] {
+  const minX = Math.min(...cells.map(([x]) => x));
+  const minY = Math.min(...cells.map(([, y]) => y));
+  return cells
+    .map(([x, y]) => [x - minX, y - minY] as const)
+    .sort(([ax, ay], [bx, by]) => (ay === by ? ax - bx : ay - by));
+}
+
+function shapeKey(cells: Coord[]) {
+  return normalizeShape(cells).map(([x, y]) => `${x},${y}`).join('|');
+}
+
+function rotateShapeClockwise(cells: Coord[]): Coord[] {
+  return normalizeShape(cells.map(([x, y]) => [y, -x] as const));
+}
+
+function sketchShape(...cells: Coord[]): Coord[][] {
+  const rotations: Coord[][] = [normalizeShape(cells)];
+  while (rotations.length < 4) {
+    const next = rotateShapeClockwise(rotations[rotations.length - 1]);
+    const duplicateIndex = rotations.findIndex((rotation) => shapeKey(rotation) === shapeKey(next));
+    rotations.push(duplicateIndex >= 0 ? rotations[duplicateIndex] : next);
+  }
+  return rotations;
+}
+
 const SHAPES: Record<TetrisPieceType, Coord[][]> = {
   I: [
     [[0, 1], [1, 1], [2, 1], [3, 1]],
@@ -285,6 +332,14 @@ const SHAPES: Record<TetrisPieceType, Coord[][]> = {
     [[0, 1], [1, 1], [2, 1], [0, 2]],
     [[0, 0], [1, 0], [1, 1], [1, 2]],
   ],
+  DOT: sketchShape([0, 0]),
+  DOMINO: sketchShape([0, 0], [0, 1]),
+  TRIO: sketchShape([0, 0], [0, 1], [0, 2]),
+  BAR4: sketchShape([0, 0], [0, 1], [0, 2], [0, 3]),
+  CORNER: sketchShape([0, 0], [1, 0], [1, 1]),
+  PLUS: sketchShape([1, 0], [0, 1], [1, 1], [2, 1], [1, 2]),
+  STAIR: sketchShape([0, 0], [1, 0], [1, 1], [2, 1], [2, 2]),
+  HOOK: sketchShape([0, 0], [0, 1], [1, 1], [2, 1], [2, 2]),
 };
 
 const SCORE_BY_LINES: Record<number, number> = {
@@ -298,8 +353,11 @@ export const TETRIS_POWERS: Record<TetrisPowerId, { id: TetrisPowerId; label: st
   slow: { id: 'slow', label: '慢动作', shortLabel: 'SLOW', cost: 60 },
   'clear-bottom': { id: 'clear-bottom', label: '清底行', shortLabel: 'CLEAR', cost: 90 },
   reroll: { id: 'reroll', label: '重铸块', shortLabel: 'ROLL', cost: 45 },
-  shield: { id: 'shield', label: '护盾', shortLabel: 'GUARD', cost: 70 },
+  shield: { id: 'shield', label: '随机清障', shortLabel: 'GUARD', cost: 70 },
 };
+
+const TETRIS_GUARD_MIN_CLEAR = 5;
+const TETRIS_GUARD_MAX_CLEAR = 10;
 
 const TETRIS_STAGE_EFFECTS: Record<TetrisStageEffectId, TetrisStageEffect> = {
   'classic-stack': { id: 'classic-stack', label: 'CLASSIC', cue: '基础热身，熟悉落块节奏' },
@@ -562,6 +620,7 @@ function createTetrisFeedback(
 function withVictoryState(state: TetrisGameState): TetrisGameState {
   if (state.status === 'game-over') return state;
   if (state.chapter.id !== 'finale' || !state.mission.completed) return state;
+  if (normalizeNonNegativeInt(state.lines) < TETRIS_FINAL_CLEAR_LINES) return state;
   if (state.status === 'victory' && state.lastFeedback?.type === 'victory') return state;
   const victoryState = { ...state, status: 'victory' as const };
   return {
@@ -597,10 +656,24 @@ function withChapterState(state: TetrisGameState): TetrisGameState {
   });
 }
 
+export function getTetrisPowerCostMultiplier(level: number): number {
+  const normalized = normalizeLevel(level);
+  if (normalized <= 5) return 1;
+  if (normalized >= 95) return TETRIS_MAX_POWER_COST_MULTIPLIER;
+  const step = Math.ceil((normalized - 5) / 5);
+  const multiplier = 1 + ((TETRIS_MAX_POWER_COST_MULTIPLIER - 1) * step) / 19;
+  return Math.min(TETRIS_MAX_POWER_COST_MULTIPLIER, multiplier);
+}
+
+export function getTetrisPowerCost(power: TetrisPowerId, level: number): number {
+  const baseCost = TETRIS_POWERS[power]?.cost || 0;
+  return Math.max(baseCost, Math.round(baseCost * getTetrisPowerCostMultiplier(level)));
+}
+
 export function canUseTetrisPower(state: TetrisGameState, power: TetrisPowerId): boolean {
   return state.status === 'playing'
     && state.unlockedPowers.includes(power)
-    && clampEnergy(state.energy) >= TETRIS_POWERS[power].cost;
+    && clampEnergy(state.energy) >= getTetrisPowerCost(power, state.level);
 }
 
 function nextSeed(seed: number) {
@@ -625,6 +698,31 @@ function createEmptyBoard(): TetrisBoard {
 
 function cloneBoard(board: TetrisBoard): TetrisBoard {
   return board.map((row) => row.map((cell) => (cell ? { ...cell } : null)));
+}
+
+function clearRandomHazardCells(board: TetrisBoard, seed: number) {
+  const nextBoard = cloneBoard(board);
+  const hazardCells: Array<{ x: number; y: number }> = [];
+  for (let y = 0; y < TETRIS_HEIGHT; y += 1) {
+    for (let x = 0; x < TETRIS_WIDTH; x += 1) {
+      if (nextBoard[y][x]?.hazard) hazardCells.push({ x, y });
+    }
+  }
+  if (!hazardCells.length) return { board: nextBoard, cleared: 0 };
+
+  const random = seededRandom(seed);
+  for (let index = hazardCells.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(random() * (index + 1));
+    [hazardCells[index], hazardCells[swapIndex]] = [hazardCells[swapIndex], hazardCells[index]];
+  }
+  const clearCount = Math.min(
+    hazardCells.length,
+    TETRIS_GUARD_MIN_CLEAR + Math.floor(random() * (TETRIS_GUARD_MAX_CLEAR - TETRIS_GUARD_MIN_CLEAR + 1)),
+  );
+  for (const { x, y } of hazardCells.slice(0, clearCount)) {
+    nextBoard[y][x] = null;
+  }
+  return { board: nextBoard, cleared: clearCount };
 }
 
 function rowFillCount(board: TetrisBoard, row: number) {
@@ -847,7 +945,7 @@ function addHazardCells(
       if (x >= 0 && x < TETRIS_WIDTH) {
         const target = findSafeHazardTarget(nextBoard, row, x);
         if (!target) continue;
-        nextBoard[target.row][target.x] = { type, locked: true, modifier };
+        nextBoard[target.row][target.x] = { type, locked: true, modifier, hazard: true };
         placed = true;
       }
     }
@@ -1143,10 +1241,15 @@ function claimMissionReward(state: TetrisGameState): TetrisGameState {
 
 function useTetrisPower(state: TetrisGameState, power: TetrisPowerId): TetrisGameState {
   if (!canUseTetrisPower(state, power)) return state;
-  const cost = TETRIS_POWERS[power].cost;
+  const cost = getTetrisPowerCost(power, state.level);
   const energyAfterCost = clampEnergy(state.energy - cost);
-  const feedback = createTetrisFeedback(state, 'power', { power, intensity: 'epic' }, nextFeedbackId(state, state.eventSeq + 1));
-  const applyMission = (next: TetrisGameState) => {
+  const createPowerFeedback = (label?: string) => createTetrisFeedback(
+    state,
+    'power',
+    { power, intensity: 'epic', label },
+    nextFeedbackId(state, state.eventSeq + 1),
+  );
+  const applyMission = (next: TetrisGameState, feedback = createPowerFeedback()) => {
     const result = applyMissionEvent(next, { power }, next.energy);
     return withChapterState({ ...next, mission: result.mission, energy: result.energy, lastFeedback: feedback });
   };
@@ -1206,14 +1309,16 @@ function useTetrisPower(state: TetrisGameState, power: TetrisPowerId): TetrisGam
     }));
   }
 
+  const clearedHazards = clearRandomHazardCells(state.board, nextSeed(state.seed + state.eventSeq + 41));
   return applyMission({
     ...state,
+    board: clearedHazards.board,
     energy: energyAfterCost,
     powerEffects: {
       ...state.powerEffects,
-      shieldCharges: state.powerEffects.shieldCharges + 1,
+      shieldCharges: 0,
     },
-  });
+  }, createPowerFeedback(clearedHazards.cleared > 0 ? `清障 x${clearedHazards.cleared}` : '暂无障碍'));
 }
 
 export function updateTetrisGame(state: TetrisGameState, action: TetrisAction): TetrisGameState {
@@ -1250,29 +1355,29 @@ export function updateTetrisGame(state: TetrisGameState, action: TetrisAction): 
   }
 }
 
+export function getTetrisSpeedMultiplier(level: number): number {
+  const normalized = normalizeLevel(level);
+  if (normalized <= 5) return 1;
+  if (normalized >= 95) return TETRIS_MAX_SPEED_MULTIPLIER;
+  const step = Math.ceil((normalized - 5) / 5);
+  const multiplier = 1 + step / 19;
+  return Math.min(TETRIS_MAX_SPEED_MULTIPLIER, Math.round(multiplier * 100) / 100);
+}
+
 export function getTetrisFallInterval(
   level: number,
   context?: Pick<TetrisGameState, 'chapter' | 'powerEffects'> | { slowTicks?: number },
 ): number {
   const normalized = normalizeLevel(level);
-  let interval = normalized <= 20
-    ? normalized <= 5
-      ? Math.max(760, 880 - (normalized - 1) * 30)
-      : Math.max(360, 690 - (normalized - 6) * 22)
-    : normalized <= 50
-      ? Math.max(210, 374 - (normalized - 21) * 6)
-      : normalized <= 80
-        ? Math.max(80, 170 - (normalized - 51) * 3)
-        : Math.max(48, 74 - (normalized - 81) * 2);
-  const chapter = context && 'chapter' in context ? context.chapter : getTetrisChapter(normalized);
-  if (chapter.speedMultiplier) interval *= chapter.speedMultiplier;
+  let interval = TETRIS_BASE_FALL_INTERVAL_MS / getTetrisSpeedMultiplier(normalized);
   const slowTicks = context
     ? 'powerEffects' in context
       ? context.powerEffects.slowTicks
       : context.slowTicks || 0
     : 0;
   if (slowTicks > 0) interval *= 1.75;
-  return Math.max(48, Math.round(interval));
+  const fastestInterval = Math.round(TETRIS_BASE_FALL_INTERVAL_MS / TETRIS_MAX_SPEED_MULTIPLIER);
+  return Math.max(fastestInterval, Math.round(interval));
 }
 
 export function getTetrisCheckpointLevel(level: number): number {
@@ -1360,7 +1465,12 @@ export function restoreTetrisGame(value: unknown): TetrisGameState | null {
       const modifier = TETRIS_CELL_MODIFIERS.includes((cell as TetrisCell).modifier as TetrisCellModifier)
         ? (cell as TetrisCell).modifier
         : undefined;
-      return { type: (cell as TetrisCell).type, locked: Boolean((cell as TetrisCell).locked), modifier };
+      return {
+        type: (cell as TetrisCell).type,
+        locked: Boolean((cell as TetrisCell).locked),
+        modifier,
+        hazard: (cell as TetrisCell).hazard || undefined,
+      };
     });
   });
   const queue = Array.isArray(raw.queue)

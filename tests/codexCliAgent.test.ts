@@ -48,8 +48,19 @@ test('Codex CLI Agent studio derives readable text colors for themed controls', 
   assert.match(palette, /createReadableStudioPalette/);
   assert.match(palette, /readableTextOn/);
   assert.match(node, /createReadableStudioPalette/);
+  assert.match(node, /readableTextOn/);
   assert.match(node, /studioAccentText/);
   assert.match(node, /studioHeaderText/);
+  assert.match(node, /const activeControlText = readableTextOn\(accent, isDark\)/);
+  assert.match(node, /segmentedControlButtonStyle/);
+  assert.match(node, /\.\.\.segmentedControlButtonStyle\(active\)/);
+  assert.match(node, /style=\{segmentedControlButtonStyle\(artifactLibraryTab === 'image'\)\}/);
+  assert.match(node, /style=\{segmentedControlButtonStyle\(artifactLibraryTab === 'text'\)\}/);
+  assert.doesNotMatch(node, /artifactLibraryTab === 'image' \? activeControlText : inactiveControlText/);
+  assert.doesNotMatch(node, /artifactLibraryTab === 'text' \? activeControlText : inactiveControlText/);
+  assert.doesNotMatch(node, /color:\s*active \? activeControlText : inactiveControlText/);
+  assert.doesNotMatch(palette, /accentText:\s*PIXEL_INVERSE_TEXT/);
+  assert.doesNotMatch(palette, /headerText:\s*PIXEL_TEXT/);
   assert.doesNotMatch(node, /color:\s*isDark \? '#04111f' : '#fff'/);
 });
 
@@ -476,6 +487,13 @@ test('Codex creator node exposes simplified mode, studio mode, external skills, 
   assert.match(node, /shouldForceImageGeneration/);
   assert.match(node, /codexRunIntent/);
   assert.match(node, /data-codex-run-intent/);
+  assert.match(node, /data-codex-run-intent-option=\{item\.id\}/);
+  assert.match(node, /data-codex-run-intent-active=\{active \? 'true' : 'false'\}/);
+  assert.match(node, /aria-pressed=\{active\}/);
+  assert.match(node, /data-codex-run-intent-summary=\{codexRunIntent\}/);
+  assert.match(node, /当前：\{codexRunIntent === 'img'/);
+  assert.match(node, /IMG 生图模式 · 默认 gpt-5\.5 \+ imagegen/);
+  assert.match(node, /LLM 文字模式 · 默认 gpt-5\.4 mini/);
   assert.match(node, /label:\s*'LLM'/);
   assert.match(node, /label:\s*'IMG'/);
   assert.match(node, /llmOnly:\s*runIntent === 'llm'/);
@@ -598,6 +616,22 @@ test('Codex creator prompt does not auto-enable image generation in LLM mode', (
 
   assert.doesNotMatch(prompt, /必须直接生成图片文件/);
   assert.doesNotMatch(prompt, /image_generation/);
+});
+
+test('Codex simple creator mode has explicit LLM IMG intent, model defaults, imagegen default skill, and image-first publishing', () => {
+  const node = read('../src/components/nodes/CodexCliAgentNode.tsx');
+
+  assert.match(node, /data-codex-simple-run-intent=\{codexRunIntent\}/);
+  assert.match(node, /const runIntent: CodexRunIntent = codexRunIntent/);
+  assert.doesNotMatch(node, /studioOpen \? codexRunIntent : 'auto'/);
+  assert.match(node, /codexModelAutoPatchForRunIntent\(nextIntent\)/);
+  assert.match(node, /findDefaultImageGenerationSkill/);
+  assert.match(node, /codexAutoImagegenSkillName/);
+  assert.match(node, /updateCodexRunIntent[\s\S]*nextIntent === 'img'[\s\S]*codexSelectedSkillNames/);
+  assert.match(node, /codexRunIntent === 'llm'[\s\S]*codexAutoImagegenSkillName/);
+  assert.doesNotMatch(node, /rawSkillNamesForRun\.push\(defaultImageGenerationSkill\.name\)/);
+  assert.match(node, /selectAutoPublishArtifact/);
+  assert.match(node, /selectAutoPublishArtifact\(runArtifactsForPublish,\s*runIntent,\s*latest\)/);
 });
 
 test('Codex creator exposes compact imagegen parameter lists and chips near prompt inputs', () => {
@@ -778,10 +812,33 @@ test('Codex creator run preferences and studio layout use the full conversation 
   assert.match(node, /renderRunPreferenceControls\(!showManage, !showManage, !showManage\)/);
   assert.doesNotMatch(node, /renderRunPreferenceControls\(!showManage, !showManage\)/);
   assert.doesNotMatch(node, /codexAutoPublishOutput !== false/);
-  assert.match(node, /if \(latest && autoPublishOutput\) publishArtifact\(latest\)/);
+  assert.match(node, /const autoPublishArtifact = selectAutoPublishArtifact\(runArtifactsForPublish,\s*runIntent,\s*latest\)/);
+  assert.match(node, /if \(autoPublishArtifact && autoPublishOutput\) publishArtifact\(autoPublishArtifact\)/);
   assert.match(node, /data-codex-studio-thread-inner/);
   assert.doesNotMatch(node, /mx-auto max-w-4xl space-y-5/);
   assert.match(node, /max-w-\[92%\]/);
+});
+
+test('Codex creator studio keeps session memory with automatic compression', () => {
+  const node = read('../src/components/nodes/CodexCliAgentNode.tsx');
+
+  assert.match(node, /CODEX_STUDIO_CONTEXT_DEFAULT_LIMIT = 30/);
+  assert.match(node, /CODEX_STUDIO_CONTEXT_MAX_LIMIT = 80/);
+  assert.match(node, /codexContextSummary/);
+  assert.match(node, /codexContextCompressedCount/);
+  assert.match(node, /codexContextLimit/);
+  assert.match(node, /function buildCodexStudioMemoryContext/);
+  assert.match(node, /function buildCodexStudioMemoryPrompt/);
+  assert.match(node, /studioOpen \? buildCodexStudioMemoryContext\(messagesRef\.current/);
+  assert.match(node, /const studioMemoryPrompt = studioMemory \? buildCodexStudioMemoryPrompt\(studioMemory\) : ''/);
+  assert.match(node, /studioMemoryPrompt/);
+  assert.match(node, /本轮创作台会话记忆/);
+  assert.match(node, /codexContextSummary: ''/);
+  assert.match(node, /codexContextCompressedCount: 0/);
+  assert.match(node, /contextSummary: String\(d\.codexContextSummary/);
+  assert.match(node, /contextCompressedCount: clampInteger\(d\.codexContextCompressedCount/);
+  assert.match(node, /已压缩 \{codexContextCompressedCount\} 条历史为长期记忆/);
+  assert.doesNotMatch(node, /studioMemoryPrompt[\s\S]{0,160}simple/);
 });
 
 test('Codex creator product library supports durable deletion and batch cleanup', () => {

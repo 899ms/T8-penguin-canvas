@@ -1440,14 +1440,18 @@ const GrokOAuthAgentNode = ({ id, data, selected }: NodeProps) => {
   }, [id, localPrompt, mentionMaterials, mode, orderedAudios, orderedImages, orderedTexts, orderedVideos, promptMentions]);
 
   const modePayload = useCallback((runMode: GrokOAuthMode, media?: {
+    prompt?: string;
     images?: string[];
     videos?: string[];
     audios?: string[];
     referenceImages?: string[];
     referenceImageUrls?: string[];
+    referenceVideos?: string[];
     inputImages?: string[];
+    inputVideos?: string[];
     sourceImageUrls?: string[];
     sourceImageUrl?: string;
+    videoUrl?: string;
   }) => {
     if (runMode === 'chat') {
       return {
@@ -1486,7 +1490,7 @@ const GrokOAuthAgentNode = ({ id, data, selected }: NodeProps) => {
       };
     }
     if (runMode === 'video') {
-      const videoModel = normalizeGrokVideoModel(d.videoModel || VIDEO_MODELS[0]);
+      const promptValue = String(media?.prompt || localPrompt || '').toLowerCase();
       const explicitImageRefs = dedupeStringArray([
         ...(media?.referenceImages || []),
         ...(media?.referenceImageUrls || []),
@@ -1497,11 +1501,32 @@ const GrokOAuthAgentNode = ({ id, data, selected }: NodeProps) => {
       const imageRefs = explicitImageRefs.length > 0
         ? explicitImageRefs
         : dedupeStringArray(media?.images || orderedImages.map((item) => item.url).filter(Boolean));
+      const explicitVideoRefs = dedupeStringArray([
+        ...(media?.referenceVideos || []),
+        ...(media?.inputVideos || []),
+        media?.videoUrl || '',
+      ]);
+      const videoRefs = explicitVideoRefs.length > 0
+        ? explicitVideoRefs
+        : dedupeStringArray(media?.videos || orderedVideos.map((item) => item.url).filter(Boolean));
+      const videoOperation = videoRefs.length > 0 && /extend|extension|continue|longer|续|延长|加长|继续/.test(promptValue)
+        ? 'extend'
+        : videoRefs.length > 0 ? 'edit' : 'generate';
+      const selectedVideoModel = normalizeGrokVideoModel(d.videoModel || VIDEO_MODELS[0]);
+      const videoModel = videoRefs.length > 0 && isGrokImageOnlyVideoModel(selectedVideoModel)
+        ? DEFAULT_TEXT_VIDEO_MODEL
+        : selectedVideoModel;
       return {
         images: isGrokImageOnlyVideoModel(videoModel) ? imageRefs.slice(0, 1) : imageRefs,
         imageUrl: imageRefs[0] || '',
+        videos: videoRefs,
+        videoUrl: videoRefs[0] || '',
         referenceImages: explicitImageRefs,
         referenceImageUrls: explicitImageRefs,
+        referenceVideos: explicitVideoRefs,
+        inputVideos: videoRefs,
+        operation: videoOperation,
+        videoOperation,
         model: videoModel,
         ratio: d.ratio || '16:9',
         aspectRatio: d.ratio || '16:9',
@@ -1546,7 +1571,7 @@ const GrokOAuthAgentNode = ({ id, data, selected }: NodeProps) => {
     const command = slash?.command || (inferredMode === 'image' ? 'image' : inferredMode === 'video' ? 'video' : inferredMode === 'tts' ? 'tts' : inferredMode === 'stt' ? 'stt' : 'chat');
     const base = payloadBase(inferredMode, promptBody, effectiveMentions);
     const videoModel = normalizeGrokVideoModel(d.videoModel || VIDEO_MODELS[0]);
-    if (inferredMode === 'video' && isGrokImageOnlyVideoModel(videoModel) && base.images.length === 0) {
+    if (inferredMode === 'video' && isGrokImageOnlyVideoModel(videoModel) && base.images.length === 0 && base.videos.length === 0) {
       update({ status: 'error', error: 'grok-imagine-video-1.5-preview 只支持图生视频：请连接至少 1 张图片，或切换到 grok-imagine-video 做文生视频。' });
       setStudioOpen(true);
       return;
@@ -1791,7 +1816,7 @@ const GrokOAuthAgentNode = ({ id, data, selected }: NodeProps) => {
     const command = slash?.command || (inferredMode === 'image' ? 'image' : inferredMode === 'video' ? 'video' : inferredMode === 'tts' ? 'tts' : inferredMode === 'stt' ? 'stt' : 'chat');
     const base = payloadBase(inferredMode, promptBody, effectiveMentions);
     const videoModel = normalizeGrokVideoModel(d.videoModel || VIDEO_MODELS[0]);
-    if (inferredMode === 'video' && isGrokImageOnlyVideoModel(videoModel) && base.images.length === 0) {
+    if (inferredMode === 'video' && isGrokImageOnlyVideoModel(videoModel) && base.images.length === 0 && base.videos.length === 0) {
       update({ status: 'error', error: 'grok-imagine-video-1.5-preview 只支持图生视频：请连接至少 1 张图片，或切换到 grok-imagine-video 做文生视频。' });
       return;
     }

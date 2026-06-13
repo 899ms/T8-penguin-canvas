@@ -302,6 +302,9 @@ test('Grok OAuth video mode routes text and image video models safely', () => {
   assert.match(node, /const VIDEO_MODELS = \[DEFAULT_TEXT_VIDEO_MODEL, DEFAULT_IMAGE_VIDEO_MODEL\]/);
   assert.match(node, /function isGrokImageOnlyVideoModel/);
   assert.match(node, /只支持图生视频/);
+  assert.match(node, /videoOperation/);
+  assert.match(node, /referenceVideos/);
+  assert.match(node, /DEFAULT_TEXT_VIDEO_MODEL/);
   assert.match(node, /images: isGrokImageOnlyVideoModel\(videoModel\) \? imageRefs\.slice\(0, 1\) : imageRefs/);
   assert.match(node, /const latestErrorRef = useRef\(''\)/);
 });
@@ -316,12 +319,23 @@ test('Grok OAuth video polling does not hang after submit', () => {
   assert.match(route, /isCompletedVideoStatus\(data\.status\)/);
   assert.match(route, /hasVideoOutput\(data\)/);
   assert.match(route, /completed_without_video_url/);
+  assert.match(route, /function uniqueUrls/);
+  assert.match(route, /const remoteVideoUrls = uniqueUrls/);
+  assert.match(route, /const GROK_VIDEO_AGENT_POLL_INTERVAL_MS = 5000/);
+  assert.match(route, /const GROK_VIDEO_AGENT_MAX_POLLS = 180/);
+  assert.match(route, /await sleep\(GROK_VIDEO_AGENT_POLL_INTERVAL_MS, res\)/);
+  assert.match(route, /requestId: \$\{requestId\}/);
+  assert.doesNotMatch(route, /await sleep\(3500, req\)/);
+  assert.doesNotMatch(route, /req\.once\('close', onClose\)/);
   assert.doesNotMatch(route, /if \(!requestId\) \{[\s\S]*?return endAgentSse\(res, first, meta\);/);
 
   assert.match(service, /Grok OAuth 视频任务已提交但没有返回 requestId/);
   assert.match(service, /isCompletedVideoStatus\(result\.status\)/);
   assert.match(service, /hasVideoOutput\(result\)/);
   assert.match(service, /completed_without_video_url/);
+  assert.match(service, /const GROK_VIDEO_AGENT_POLL_INTERVAL_MS = 5000/);
+  assert.match(service, /const GROK_VIDEO_AGENT_MAX_POLLS = 180/);
+  assert.match(service, /await fallbackDelay\(GROK_VIDEO_AGENT_POLL_INTERVAL_MS, options\.signal\)/);
   assert.match(service, /const VIDEO_DONE_STATUSES = new Set/);
   assert.match(service, /'complete'/);
   assert.match(service, /'finished'/);
@@ -329,9 +343,15 @@ test('Grok OAuth video polling does not hang after submit', () => {
 
   if (privateHook) {
     assert.match(privateHook, /function videoStatusEndpointCandidates/);
-    assert.match(privateHook, /\/videos\/generations\/\$\{encodeURIComponent\(requestId\)\}/);
-    assert.match(privateHook, /\/videos\/\$\{encodeURIComponent\(requestId\)\}/);
+    assert.match(privateHook, /\/videos\/\$\{encodeURIComponent\(requestId\)\}[\s\S]*\/videos\/generations\/\$\{encodeURIComponent\(requestId\)\}/);
     assert.match(privateHook, /function fetchVideoStatusResult/);
+    assert.match(privateHook, /function normalizeVideoOperation/);
+    assert.match(privateHook, /\/videos\/edits/);
+    assert.match(privateHook, /\/videos\/extensions/);
+    assert.match(privateHook, /payload\.video = \{ url: firstVideo \}/);
+    assert.match(privateHook, /const minDuration = firstVideo \? 2 : 1/);
+    assert.match(privateHook, /mimeFromMediaExt/);
+    assert.match(privateHook, /video\/mp4/);
     assert.match(privateHook, /VIDEO_DONE_STATUSES/);
     assert.match(privateHook, /'complete'/);
     assert.match(privateHook, /'finished'/);

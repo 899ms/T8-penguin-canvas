@@ -484,6 +484,13 @@
           "condition": { "type": "counter", "metric": "tetrisFinaleCompleted", "count": 1 }
         },
         {
+          "idSuffix": "matrix-cinema",
+          "title": "隐藏影片墙",
+          "description": "通关俄罗斯方块 Lv99 彩蛋终章，开启隐藏奖励影片墙。",
+          "rarity": "hidden",
+          "condition": { "type": "counter", "metric": "tetrisFinaleCompleted", "count": 1 }
+        },
+        {
           "idSuffix": "hundred-lines",
           "title": "百行堆栈",
           "description": "在俄罗斯方块主题小游戏里累计清除 100 行。",
@@ -500,6 +507,7 @@
       "title": "科技风奖励影片",
       "unlockAchievementId": "tech-time-10h",
       "lockedText": "待解锁",
+      "unlockedText": "科技风隐藏奖励影片已解锁，可播放",
       "unavailableText": "影片素材待提供"
     },
     {
@@ -508,6 +516,7 @@
       "title": "RH 隐藏奖励影片",
       "unlockAchievementId": "rh-duck-decoded",
       "lockedText": "待解锁",
+      "unlockedText": "RH 隐藏奖励影片已解锁，可播放",
       "unavailableText": "影片素材待提供"
     },
     {
@@ -516,6 +525,7 @@
       "title": "幽游隐藏奖励影片",
       "unlockAchievementId": "yyh-portrait-output",
       "lockedText": "待解锁",
+      "unlockedText": "幽游隐藏奖励影片已解锁，可播放",
       "unavailableText": "影片素材待提供"
     },
     {
@@ -524,6 +534,7 @@
       "title": "七龙珠奖励影片",
       "unlockAchievementId": "dragon-ball-shenron-mode",
       "lockedText": "待解锁",
+      "unlockedText": "龙珠隐藏奖励影片已解锁，可播放",
       "unavailableText": "影片素材待提供"
     },
     {
@@ -532,6 +543,16 @@
       "title": "圣斗士奖励影片",
       "unlockAchievementId": "saint-seiya-athena-return",
       "lockedText": "待解锁",
+      "unlockedText": "圣斗士奖励影片已解锁，可播放",
+      "unavailableText": "影片素材待提供"
+    },
+    {
+      "id": "film-tetris-01",
+      "theme": "tetris",
+      "title": "俄罗斯方块隐藏奖励影片",
+      "unlockAchievementId": "tetris-matrix-cinema",
+      "lockedText": "通关彩蛋终章后解锁",
+      "unlockedText": "俄罗斯方块隐藏奖励影片已解锁，可播放",
       "unavailableText": "影片素材待提供"
     }
   ]

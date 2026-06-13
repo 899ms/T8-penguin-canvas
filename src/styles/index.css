@@ -2990,6 +2990,128 @@ html[data-theme-visual="op"] .t8-theme-music-toggle.is-playing {
   background: #020617;
 }
 
+.t8-achievement-film-stage[data-film-theme]::before,
+.t8-achievement-film-stage[data-film-theme]::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"] {
+  background:
+    linear-gradient(rgba(103, 232, 249, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 232, 249, 0.1) 1px, transparent 1px),
+    radial-gradient(circle at 74% 20%, rgba(255, 205, 61, 0.2), transparent 20%),
+    radial-gradient(circle at 22% 78%, rgba(164, 92, 255, 0.18), transparent 24%),
+    #06101f;
+  background-size: 34px 34px, 34px 34px, auto, auto, auto;
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"]::before {
+  left: max(22px, 4vw);
+  top: max(28px, 8vh);
+  width: 164px;
+  height: 164px;
+  background:
+    linear-gradient(#67e8f9 0 0) 0 0 / 38px 38px,
+    linear-gradient(#67e8f9 0 0) 40px 0 / 38px 38px,
+    linear-gradient(#4ade80 0 0) 80px 0 / 38px 38px,
+    linear-gradient(#ffcf3a 0 0) 40px 40px / 38px 38px,
+    linear-gradient(#a855f7 0 0) 80px 40px / 38px 38px,
+    linear-gradient(#fb7185 0 0) 120px 40px / 38px 38px,
+    linear-gradient(#fb923c 0 0) 80px 80px / 38px 38px,
+    linear-gradient(#3b82f6 0 0) 120px 80px / 38px 38px;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 0 20px rgba(103, 232, 249, 0.38));
+  opacity: 0.62;
+  transform: rotate(-8deg);
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"]::after {
+  right: max(18px, 5vw);
+  bottom: max(30px, 7vh);
+  width: 210px;
+  height: 110px;
+  border: 2px solid rgba(255, 207, 58, 0.55);
+  background:
+    linear-gradient(#22d3ee 0 0) 12px 60px / 26px 26px,
+    linear-gradient(#22d3ee 0 0) 40px 60px / 26px 26px,
+    linear-gradient(#22d3ee 0 0) 68px 60px / 26px 26px,
+    linear-gradient(#f97316 0 0) 116px 34px / 26px 26px,
+    linear-gradient(#f97316 0 0) 144px 34px / 26px 26px,
+    linear-gradient(#f97316 0 0) 144px 62px / 26px 26px,
+    linear-gradient(rgba(255, 255, 255, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+  background-repeat: no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, repeat, repeat;
+  background-size: 26px 26px, 26px 26px, 26px 26px, 26px 26px, 26px 26px, 26px 26px, 14px 14px, 14px 14px;
+  border-radius: 10px;
+  box-shadow: 0 0 32px rgba(255, 207, 58, 0.24);
+  opacity: 0.58;
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"] .t8-achievement-film-stage__panel {
+  border-width: 3px;
+  border-color: #ffcf3a;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+    linear-gradient(180deg, #0b1220, #111827 46%, #060b16);
+  background-size: 24px 24px, 24px 24px, auto;
+  box-shadow:
+    0 0 0 5px rgba(6, 182, 212, 0.24),
+    0 0 62px rgba(255, 207, 58, 0.22),
+    0 28px 110px rgba(0, 0, 0, 0.72);
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"] .t8-achievement-film-stage__header,
+.t8-achievement-film-stage[data-film-theme="tetris"] .t8-achievement-film-stage__footer {
+  border-color: rgba(103, 232, 249, 0.42);
+  background: linear-gradient(90deg, rgba(34, 211, 238, 0.14), rgba(255, 207, 58, 0.13), rgba(168, 85, 247, 0.13));
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"] .t8-achievement-film-stage__header strong {
+  color: #ffcf3a;
+  text-shadow: 0 0 14px rgba(255, 207, 58, 0.34);
+}
+
+.t8-achievement-film-stage[data-film-theme="tetris"] .t8-achievement-film-stage__player {
+  min-height: min(58vw, 580px);
+  border-top: 2px solid rgba(103, 232, 249, 0.42);
+  border-bottom: 2px solid rgba(103, 232, 249, 0.42);
+}
+
+.t8-achievement-film-stage[data-film-theme="rh"] {
+  background:
+    radial-gradient(circle at 20% 18%, rgba(34, 211, 238, 0.18), transparent 25%),
+    linear-gradient(rgba(45, 212, 191, 0.1) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(45, 212, 191, 0.1) 1px, transparent 1px),
+    #041418;
+  background-size: auto, 38px 38px, 38px 38px, auto;
+}
+
+.t8-achievement-film-stage[data-film-theme="yyh"] {
+  background:
+    radial-gradient(circle at 54% 46%, rgba(16, 185, 129, 0.22), transparent 28%),
+    radial-gradient(circle at 80% 80%, rgba(59, 130, 246, 0.16), transparent 28%),
+    #07130f;
+}
+
+.t8-achievement-film-stage[data-film-theme="dragon-ball"] {
+  background:
+    radial-gradient(circle at 50% 50%, rgba(251, 191, 36, 0.2), transparent 24%),
+    radial-gradient(circle at 24% 78%, rgba(239, 68, 68, 0.18), transparent 24%),
+    #130c05;
+}
+
+.t8-achievement-film-stage[data-film-theme="tech"] {
+  background:
+    linear-gradient(rgba(96, 165, 250, 0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(96, 165, 250, 0.12) 1px, transparent 1px),
+    radial-gradient(circle at 78% 12%, rgba(56, 189, 248, 0.18), transparent 28%),
+    #040b17;
+  background-size: 42px 42px, 42px 42px, auto, auto;
+}
+
 html[data-theme-visual="saint-seiya"] .t8-achievement-drawer__panel,
 html[data-theme-visual="saint-seiya"] .t8-achievement-film-stage__panel {
   --saint-achievement-ink: #211607;

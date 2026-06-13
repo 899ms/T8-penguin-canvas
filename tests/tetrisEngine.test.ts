@@ -14,6 +14,8 @@ import {
   getGhostY,
   getTetrisCheckpointLevel,
   getTetrisFallInterval,
+  getTetrisPowerCost,
+  getTetrisSpeedMultiplier,
   makeSevenBag,
   restoreTetrisCheckpoint,
   restoreTetrisGame,
@@ -52,6 +54,34 @@ test('piece preview cells are centered inside the 4 x 4 preview grid', () => {
   assert.equal(Math.max(...tCells.map(([x]) => x)), 2);
   assert.equal(Math.min(...tCells.map(([, y]) => y)), 1);
   assert.equal(Math.max(...tCells.map(([, y]) => y)), 2);
+});
+
+test('custom sketch pieces join the falling piece pool with centered previews', () => {
+  const sketchPieces = ['DOT', 'DOMINO', 'TRIO', 'BAR4', 'CORNER', 'PLUS', 'STAIR', 'HOOK'] as const;
+  for (const piece of sketchPieces) {
+    assert.equal(TETRIS_PIECES.includes(piece), true);
+  }
+
+  assert.deepEqual(getPiecePreviewCells('DOT'), [[1, 1]]);
+  assert.deepEqual(getPiecePreviewCells('DOMINO'), [[1, 1], [1, 2]]);
+  assert.deepEqual(getPiecePreviewCells('TRIO'), [[1, 0], [1, 1], [1, 2]]);
+  assert.deepEqual(getPiecePreviewCells('BAR4'), [[1, 0], [1, 1], [1, 2], [1, 3]]);
+  assert.deepEqual(getPiecePreviewCells('CORNER'), [[1, 1], [2, 1], [2, 2]]);
+  assert.deepEqual(getPiecePreviewCells('PLUS'), [[1, 0], [0, 1], [1, 1], [2, 1], [1, 2]]);
+});
+
+test('custom sketch pieces can spawn, rotate, and lock with their own cell count', () => {
+  let game = createTetrisGame({ queue: ['DOT', 'DOMINO', 'TRIO', 'PLUS', 'I', 'O', 'T'] });
+  const dotDrop = updateTetrisGame(game, { type: 'hardDrop' });
+  assert.equal(dotDrop.board.flat().filter((cell) => cell?.type === 'DOT').length, 1);
+  assert.equal(dotDrop.active.type, 'DOMINO');
+
+  game = updateTetrisGame(dotDrop, { type: 'rotate', direction: 'clockwise' });
+  const beforeDrop = game.active;
+  const dominoDrop = updateTetrisGame(game, { type: 'hardDrop' });
+
+  assert.equal(beforeDrop.rotation, 1);
+  assert.equal(dominoDrop.board.flat().filter((cell) => cell?.type === 'DOMINO').length, 2);
 });
 
 test('movement stops at the well wall instead of wrapping outside the board', () => {
@@ -279,11 +309,37 @@ test('early specialty chapters increase obstacle pressure before level 20', () =
   assert.equal(comboDrop.lastFeedback?.type, 'hazard');
 });
 
-test('fall speed starts ramping harder during levels 6 to 20', () => {
-  assert.equal(getTetrisFallInterval(6) < getTetrisFallInterval(5), true);
-  assert.equal(getTetrisFallInterval(20) <= 440, true);
-  assert.equal(getTetrisFallInterval(21) < getTetrisFallInterval(20), true);
-  assert.equal(getTetrisFallInterval(51) < getTetrisFallInterval(50), true);
+test('fall speed ramps evenly by five-level checkpoints and caps at 2x', () => {
+  assert.equal(getTetrisSpeedMultiplier(1), 1);
+  assert.equal(getTetrisSpeedMultiplier(5), 1);
+  assert.equal(getTetrisFallInterval(1), 880);
+  assert.equal(getTetrisFallInterval(5), 880);
+
+  assert.equal(getTetrisSpeedMultiplier(10), 1.05);
+  assert.equal(getTetrisSpeedMultiplier(15), 1.11);
+  assert.equal(getTetrisFallInterval(10) < getTetrisFallInterval(5), true);
+  assert.equal(getTetrisFallInterval(15) < getTetrisFallInterval(10), true);
+
+  assert.equal(getTetrisSpeedMultiplier(94), 1.95);
+  assert.equal(getTetrisSpeedMultiplier(95), 2);
+  assert.equal(getTetrisSpeedMultiplier(99), 2);
+  assert.equal(getTetrisFallInterval(95), 440);
+  assert.equal(getTetrisFallInterval(99), 440);
+});
+
+test('power costs ramp evenly by five-level checkpoints and cap at 1.5x', () => {
+  assert.equal(getTetrisPowerCost('slow', 1), TETRIS_POWERS.slow.cost);
+  assert.equal(getTetrisPowerCost('slow', 5), TETRIS_POWERS.slow.cost);
+  assert.equal(getTetrisPowerCost('reroll', 50), 56);
+  assert.equal(getTetrisPowerCost('shield', 95), 105);
+  assert.equal(getTetrisPowerCost('clear-bottom', 99), 135);
+
+  const lateGame = {
+    ...createTetrisGame({ level: 95, queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] }),
+    energy: getTetrisPowerCost('shield', 95) - 1,
+  };
+  assert.equal(canUseTetrisPower(lateGame, 'shield'), false);
+  assert.equal(canUseTetrisPower({ ...lateGame, energy: getTetrisPowerCost('shield', 95) }, 'shield'), true);
 });
 
 test('post level 20 hazard chapters add denser obstacle pressure', () => {
@@ -362,7 +418,7 @@ test('power skills consume energy and change gameplay state', () => {
 
   const slowReady = {
     ...createTetrisGame({ level: 6, queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] }),
-    energy: TETRIS_POWERS.slow.cost,
+    energy: getTetrisPowerCost('slow', 6),
   };
   assert.equal(canUseTetrisPower(slowReady, 'slow'), true);
   const slowed = updateTetrisGame(slowReady, { type: 'usePower', power: 'slow' });
@@ -377,7 +433,7 @@ test('power skills consume energy and change gameplay state', () => {
   const clearReady = {
     ...createTetrisGame({ level: 21, queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] }),
     board,
-    energy: TETRIS_POWERS['clear-bottom'].cost,
+    energy: getTetrisPowerCost('clear-bottom', 21),
   };
   const clearBottom = updateTetrisGame(clearReady, { type: 'usePower', power: 'clear-bottom' });
   assert.equal(clearBottom.energy, 0);
@@ -387,7 +443,7 @@ test('power skills consume energy and change gameplay state', () => {
 
   const rerollReady = {
     ...createTetrisGame({ level: 31, queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] }),
-    energy: TETRIS_POWERS.reroll.cost,
+    energy: getTetrisPowerCost('reroll', 31),
   };
   const rerolled = updateTetrisGame(rerollReady, { type: 'usePower', power: 'reroll' });
   assert.notEqual(rerolled.active.type, rerollReady.active.type);
@@ -395,9 +451,42 @@ test('power skills consume energy and change gameplay state', () => {
   assert.equal(rerolled.lastFeedback?.type, 'power');
 });
 
+test('guard power randomly clears only added hazard cells', () => {
+  const base = createTetrisGame({ level: 96, seed: 20260613, queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'] });
+  const board = base.board.map((row) => [...row]);
+  const hazardPositions = [
+    [18, 0], [18, 2], [18, 4], [18, 6], [18, 8], [17, 1],
+    [17, 3], [17, 5], [17, 7], [17, 9], [16, 2], [16, 6],
+  ];
+  for (const [y, x] of hazardPositions) {
+    board[y][x] = { type: 'Z', locked: true, modifier: 'combo', hazard: true };
+  }
+  board[19][1] = { type: 'T', locked: true, modifier: 'combo' };
+  board[19][5] = filledCell('O');
+  const ready = {
+    ...base,
+    board,
+    energy: getTetrisPowerCost('shield', base.level),
+  };
+
+  const guarded = updateTetrisGame(ready, { type: 'usePower', power: 'shield' });
+  const beforeHazards = ready.board.flat().filter((cell) => cell?.hazard).length;
+  const afterHazards = guarded.board.flat().filter((cell) => cell?.hazard).length;
+
+  assert.equal(beforeHazards, 12);
+  assert.equal(beforeHazards - afterHazards >= 5, true);
+  assert.equal(beforeHazards - afterHazards <= 10, true);
+  assert.equal(guarded.board[19][1]?.modifier, 'combo');
+  assert.equal(guarded.board[19][1]?.hazard, undefined);
+  assert.equal(guarded.board[19][5]?.type, 'O');
+  assert.equal(guarded.powerEffects.shieldCharges, 0);
+  assert.equal(guarded.energy, 0);
+});
+
 test('finale mission completion opens a persistent victory state', () => {
   const game = createTetrisGame({
     level: 99,
+    lines: 990,
     queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'],
   });
   const ready = {
@@ -421,6 +510,48 @@ test('finale mission completion opens a persistent victory state', () => {
   const ignoredMove = updateTetrisGame(won, { type: 'move', dx: -1 });
   assert.equal(ignoredMove.active.x, won.active.x);
   assert.equal(restoreTetrisGame(JSON.parse(JSON.stringify(won)))?.status, 'victory');
+});
+
+test('finale mission cannot trigger victory before level 99 is completed', () => {
+  const level96Game = createTetrisGame({
+    level: 96,
+    lines: 954,
+    queue: ['I', 'O', 'T', 'S', 'Z', 'J', 'L'],
+  });
+  const earlyReady = {
+    ...level96Game,
+    energy: 999,
+    mission: {
+      ...level96Game.mission,
+      progress: level96Game.mission.target - 1,
+      completed: false,
+      rewardClaimed: false,
+    },
+  };
+
+  const earlyCompleted = updateTetrisGame(earlyReady, { type: 'usePower', power: 'slow' });
+
+  assert.equal(earlyCompleted.mission.completed, true);
+  assert.equal(earlyCompleted.status, 'playing');
+  assert.notEqual(earlyCompleted.lastFeedback?.type, 'victory');
+
+  const level99AlmostDone = {
+    ...earlyCompleted,
+    level: 99,
+    lines: 989,
+    status: 'playing' as const,
+  };
+  const stillPlaying = restoreTetrisGame(JSON.parse(JSON.stringify(level99AlmostDone)));
+
+  assert.equal(stillPlaying?.status, 'playing');
+
+  const level99Done = {
+    ...level99AlmostDone,
+    lines: 990,
+  };
+  const won = restoreTetrisGame(JSON.parse(JSON.stringify(level99Done)));
+
+  assert.equal(won?.status, 'victory');
 });
 
 test('tetris clears and combo chains emit arcade feedback events', () => {

@@ -72,6 +72,7 @@ export interface AchievementFilmReward {
   title: string;
   unlockAchievementId: string;
   lockedText: string;
+  unlockedText?: string;
   unavailableText: string;
 }
 

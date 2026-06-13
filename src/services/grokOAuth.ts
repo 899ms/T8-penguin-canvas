@@ -1,4 +1,6 @@
 const BASE = '/api/grok-oauth';
+const GROK_VIDEO_AGENT_POLL_INTERVAL_MS = 5000;
+const GROK_VIDEO_AGENT_MAX_POLLS = 180;
 
 export const GROK_OAUTH_PRIVATE_DISABLED_MESSAGE = 'Grok OAuth 私有模块未启用，请使用带私有模块的本地版本。';
 
@@ -444,16 +446,20 @@ async function runLegacyGrokOAuthAgentFallback(
       message: first.message ? `${first.message} 旧接口兼容轮询中...` : '视频任务已提交，旧接口兼容轮询中...',
       result: first,
     });
-    for (let i = 0; i < 120; i += 1) {
-      await fallbackDelay(3500, options.signal);
+    let lastPoll: GrokOAuthMediaResult = first;
+    for (let i = 0; i < GROK_VIDEO_AGENT_MAX_POLLS; i += 1) {
+      await fallbackDelay(GROK_VIDEO_AGENT_POLL_INTERVAL_MS, options.signal);
       const result = await queryGrokOAuthVideoStatus({ ...payload, requestId });
+      lastPoll = result;
       emit({
         type: 'tool.progress',
         event: 'tool.progress',
         ...meta,
         requestId,
-        progress: typeof result.progress === 'number' ? result.progress : Math.min(95, 10 + i),
-        message: result.message || `视频生成中 ${i + 1}/120`,
+        progress: typeof result.progress === 'number'
+          ? result.progress
+          : Math.min(95, 10 + Math.round(((i + 1) / GROK_VIDEO_AGENT_MAX_POLLS) * 85)),
+        message: result.message || `视频生成中 ${i + 1}/${GROK_VIDEO_AGENT_MAX_POLLS}`,
         result,
       });
       if (result.status === 'failed' || result.error) throw new Error(result.error || result.message || 'Grok OAuth 视频生成失败');
@@ -466,7 +472,9 @@ async function runLegacyGrokOAuthAgentFallback(
         return result;
       }
     }
-    throw new Error('Grok OAuth 视频生成超时，请稍后到异步任务中查看。');
+    const waitedMinutes = Math.round((GROK_VIDEO_AGENT_MAX_POLLS * GROK_VIDEO_AGENT_POLL_INTERVAL_MS) / 60000);
+    const lastStatus = lastPoll?.status || lastPoll?.state || lastPoll?.phase || lastPoll?.message || '未知';
+    throw new Error(`Grok OAuth 视频生成超时（已等待约 ${waitedMinutes} 分钟，requestId: ${requestId}，最后状态：${lastStatus}）。请稍后重试或用任务 ID 查询。`);
   }
 
   throw new Error(`不支持的 Grok OAuth Agent 模式：${mode}`);

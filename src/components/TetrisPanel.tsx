@@ -1,10 +1,13 @@
 import { type KeyboardEvent, type SyntheticEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { Eraser, Pause, Play, RotateCcw, Shield, Shuffle, Square, Timer, Trophy, Zap } from 'lucide-react';
-import { trackAchievementEvent } from '../stores/achievements';
+import { createPortal } from 'react-dom';
+import { Eraser, Maximize2, Minimize2, Pause, Play, RotateCcw, Shield, Shuffle, Square, Timer, Trophy, Zap } from 'lucide-react';
+import { trackAchievementEvent, useAchievementStore } from '../stores/achievements';
 import {
   TETRIS_HEIGHT,
   TETRIS_WIDTH,
   TETRIS_CHECKPOINT_STEP,
+  TETRIS_CHAPTERS,
+  TETRIS_FINAL_CLEAR_LINES,
   TETRIS_POWERS,
   canUseTetrisPower,
   createTetrisCheckpoint,
@@ -12,7 +15,9 @@ import {
   getPiecePreviewCells,
   getTetrisChapter,
   getTetrisFallInterval,
+  getTetrisPowerCost,
   getTetrisRenderBoard,
+  getTetrisSpeedMultiplier,
   restoreTetrisCheckpoint,
   restoreTetrisGame,
   updateTetrisGame,
@@ -33,14 +38,19 @@ interface TetrisPanelProps {
 export const TETRIS_PANEL_COLLAPSED_STORAGE_KEY = 't8.tetris.panel.collapsed.v1';
 export const TETRIS_PANEL_STATE_STORAGE_KEY = 't8.tetris.state.v1';
 export const TETRIS_PANEL_CHECKPOINT_STORAGE_KEY = 't8.tetris.checkpoints.v1';
+export const TETRIS_VICTORY_CUTSCENE_MS = 10_000;
 const TETRIS_PANEL_BEST_STORAGE_KEY = 't8.tetris.best.v1';
+const TETRIS_DEV_CHECKPOINTS_ENABLED = import.meta.env.DEV;
+const TETRIS_DEV_FINALE_TEST = TETRIS_DEV_CHECKPOINTS_ENABLED;
+const TETRIS_DEV_CHECKPOINT_LEVELS = TETRIS_CHAPTERS
+  .map((chapter) => chapter.levelEnd)
+  .filter((level) => level >= TETRIS_CHECKPOINT_STEP && level % TETRIS_CHECKPOINT_STEP === 0);
 const TETRIS_POWER_BUTTONS: Array<{ id: TetrisPowerId; icon: typeof Timer; hint: string; key: string }> = [
   { id: 'slow', icon: Timer, hint: '短时间慢速下落', key: '1' },
   { id: 'clear-bottom', icon: Eraser, hint: '清掉最底一行', key: '2' },
   { id: 'reroll', icon: Shuffle, hint: '重铸当前方块', key: '3' },
-  { id: 'shield', icon: Shield, hint: '抵消一次障碍', key: '4' },
+  { id: 'shield', icon: Shield, hint: '随机清除 5-10 个障碍', key: '4' },
 ];
-const TETRIS_POWER_COST_LABEL = '技能需 45/60/70/90 POWER';
 
 type BestTetrisRecord = {
   score: number;
@@ -118,6 +128,30 @@ function checkpointOptionLabel(checkpoint: TetrisCheckpoint) {
   return `Lv${checkpoint.level} ${chapter.name} / ${checkpoint.lines}L`;
 }
 
+function createDevTetrisCheckpoint(level: number): TetrisCheckpoint {
+  const lines = Math.max(0, level * 10 - 10);
+  const state = createTetrisGame({ level, lines });
+  return {
+    level,
+    lines: state.lines,
+    score: state.score,
+    savedAt: 0,
+    state,
+  };
+}
+
+function getTetrisCheckpointOptions(records: TetrisCheckpoint[]) {
+  if (!TETRIS_DEV_CHECKPOINTS_ENABLED) return records;
+  const byLevel = new Map<number, TetrisCheckpoint>();
+  for (const level of TETRIS_DEV_CHECKPOINT_LEVELS) {
+    byLevel.set(level, createDevTetrisCheckpoint(level));
+  }
+  for (const checkpoint of records) {
+    byLevel.set(checkpoint.level, checkpoint);
+  }
+  return sortCheckpoints(Array.from(byLevel.values()));
+}
+
 function isTextInputTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
     ? Boolean(target.closest('input, textarea, select, [contenteditable="true"]'))
@@ -144,6 +178,7 @@ function hasBlockingModalOpen() {
     '.t8-modal-mask',
     '.t8-modal-backdrop',
     '.t8-achievement-film-stage',
+    '.t8-tetris-victory-cutscene',
   ];
   return selectors.some((selector) =>
     Array.from(document.querySelectorAll(selector)).some((element) => {
@@ -156,14 +191,9 @@ function hasBlockingModalOpen() {
   );
 }
 
-function formatSpeed(ms: number) {
-  return `${Math.max(1, Math.round(1000 / Math.max(1, ms)))}x`;
-}
-
-function formatChapterSpeed(speedMultiplier?: number) {
-  if (!speedMultiplier || speedMultiplier === 1) return '标准速度';
-  if (speedMultiplier < 1) return `加速 ${Math.round((1 - speedMultiplier) * 100)}%`;
-  return `减速 ${Math.round((speedMultiplier - 1) * 100)}%`;
+function formatSpeed(multiplier: number) {
+  const rounded = Math.round(multiplier * 100) / 100;
+  return `${rounded.toFixed(2).replace(/\.?0+$/, '')}x`;
 }
 
 function cellClass(cell: TetrisCell | null) {
@@ -172,6 +202,7 @@ function cellClass(cell: TetrisCell | null) {
     't8-tetris-cell',
     `is-${cell.type.toLowerCase()}`,
     cell.modifier ? `is-${cell.modifier}` : '',
+    cell.hazard ? 'is-hazard-added' : '',
     cell.locked ? 'is-locked' : '',
     cell.active ? 'is-active' : '',
     cell.ghost ? 'is-ghost' : '',
@@ -209,6 +240,7 @@ function PiecePreview({ label, type }: { label: string; type: TetrisPieceType | 
 
 export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging }: TetrisPanelProps) {
   const isTetrisTheme = visualStyle === 'tetris';
+  const openAchievementDrawer = useAchievementStore((state) => state.openDrawer);
   const [collapsed, setCollapsed] = useState(() => {
     if (typeof window === 'undefined') return false;
     return window.localStorage.getItem(TETRIS_PANEL_COLLAPSED_STORAGE_KEY) === '1';
@@ -226,6 +258,9 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
   const [modalOpen, setModalOpen] = useState(false);
   const [autoPauseReason, setAutoPauseReason] = useState<string | null>(null);
   const [missionFlash, setMissionFlash] = useState<MissionFlash | null>(null);
+  const [isStageMode, setIsStageMode] = useState(false);
+  const [victoryCutsceneVisible, setVictoryCutsceneVisible] = useState(false);
+  const panelRootRef = useRef<HTMLDivElement | null>(null);
   const lastClearIdRef = useRef(game.lastClear.id);
   const trackedLevelsRef = useRef(new Set<number>());
   const trackedChapterCheckpointRef = useRef(new Set<number>(checkpoints.map((item) => item.level)));
@@ -233,24 +268,31 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
   const gameStartedTrackedRef = useRef(false);
   const lastCheckpointLevelRef = useRef(checkpoints.length ? checkpoints[checkpoints.length - 1].level : 1);
   const completedMissionRef = useRef(game.mission.completed ? game.mission.id : '');
+  const previousGameStatusRef = useRef(game.status);
+  const victoryCutscenePlayedRef = useRef(game.status === 'victory');
 
   const renderBoard = useMemo(() => getTetrisRenderBoard(game), [game]);
   const chapter = game.chapter || getTetrisChapter(game.level);
   const fallInterval = getTetrisFallInterval(game.level, game);
+  const speedMultiplier = getTetrisSpeedMultiplier(game.level);
   const missionPercent = Math.min(100, Math.round((game.mission.progress / Math.max(1, game.mission.target)) * 100));
   const missionComplete = game.mission.completed;
   const isVictory = game.status === 'victory';
-  const chapterSpeedLabel = formatChapterSpeed(chapter.speedMultiplier);
+  const chapterSpeedLabel = `${formatSpeed(speedMultiplier)} 速度`;
   const chapterUnlockLabel = chapter.unlockPower
     ? `解锁 ${TETRIS_POWERS[chapter.unlockPower].shortLabel}`
     : '5关切换';
+  const powerCostSummary = TETRIS_POWER_BUTTONS
+    .map(({ id }) => getTetrisPowerCost(id, game.level))
+    .join('/');
   const feedbackPanelClass = game.lastFeedback?.type ? `has-feedback-${game.lastFeedback?.type} has-feedback-${game.lastFeedback?.intensity}` : '';
   const visibleFeedback = game.lastFeedback && game.lastFeedback.type !== 'drop' ? game.lastFeedback : null;
-  const keyboardActive = hovered || focused;
+  const keyboardActive = isStageMode || hovered || focused;
   const externalNodeDragging = nodeDragging && !keyboardActive;
-  const selectedCheckpoint = checkpoints.find((item) => item.level === selectedCheckpointLevel) || null;
+  const checkpointOptions = useMemo(() => getTetrisCheckpointOptions(checkpoints), [checkpoints]);
+  const selectedCheckpoint = checkpointOptions.find((item) => item.level === selectedCheckpointLevel) || null;
   const activeAutoPauseReason = collapsed
-    ? '游戏已折叠'
+    ? isStageMode ? null : '游戏已折叠'
     : !windowReady
       ? '窗口失焦，游戏已暂停'
       : modalOpen
@@ -273,6 +315,19 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
     if (!isTetrisTheme || typeof window === 'undefined') return;
     window.localStorage.setItem(TETRIS_PANEL_COLLAPSED_STORAGE_KEY, collapsed ? '1' : '0');
   }, [collapsed, isTetrisTheme]);
+
+  useEffect(() => {
+    if (!isStageMode || typeof document === 'undefined' || typeof window === 'undefined') return;
+    document.body.classList.add('t8-tetris-stage-open');
+    window.requestAnimationFrame(() => panelRootRef.current?.focus({ preventScroll: true }));
+    return () => document.body.classList.remove('t8-tetris-stage-open');
+  }, [isStageMode]);
+
+  useEffect(() => {
+    if (!victoryCutsceneVisible || typeof document === 'undefined') return;
+    document.body.classList.add('t8-tetris-victory-cutscene-open');
+    return () => document.body.classList.remove('t8-tetris-victory-cutscene-open');
+  }, [victoryCutsceneVisible]);
 
   useEffect(() => {
     if (!isTetrisTheme || typeof window === 'undefined') return;
@@ -448,6 +503,18 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
     }
   }, [game.lastClear, game.level, game.status, isTetrisTheme]);
 
+  useEffect(() => {
+    if (!isTetrisTheme) return;
+    const previousStatus = previousGameStatusRef.current;
+    previousGameStatusRef.current = game.status;
+    const justWon = game.status === 'victory' && previousStatus !== 'victory';
+    if (!justWon || victoryCutscenePlayedRef.current) return;
+    victoryCutscenePlayedRef.current = true;
+    setVictoryCutsceneVisible(true);
+    const timer = window.setTimeout(() => setVictoryCutsceneVisible(false), TETRIS_VICTORY_CUTSCENE_MS);
+    return () => window.clearTimeout(timer);
+  }, [game.status, isTetrisTheme]);
+
   if (!isTetrisTheme) return null;
 
   const commitStartedGame = (nextGame: TetrisGameState, kind: string) => {
@@ -457,7 +524,10 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
     trackedLevelsRef.current = new Set([10, 50, 99].filter((milestone) => nextGame.level >= milestone));
     gameStartedTrackedRef.current = true;
     completedMissionRef.current = nextGame.mission.completed ? nextGame.mission.id : '';
+    previousGameStatusRef.current = nextGame.status;
+    victoryCutscenePlayedRef.current = nextGame.status === 'victory';
     setMissionFlash(null);
+    setVictoryCutsceneVisible(false);
     setGame(nextGame);
     trackAchievementEvent({
       type: 'tetris.game_started',
@@ -482,10 +552,35 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
     commitStartedGame(updateTetrisGame(game, { type: 'restart' }), 'fresh');
   };
 
+  const startFinaleTestGame = () => {
+    const finaleGame = createTetrisGame({ level: 99, lines: TETRIS_FINAL_CLEAR_LINES });
+    const nextGame = {
+      ...finaleGame,
+      energy: 999,
+      mission: {
+        ...finaleGame.mission,
+        progress: Math.max(0, finaleGame.mission.target - 1),
+        completed: false,
+        rewardClaimed: false,
+      },
+    };
+    trackedLevelsRef.current = new Set([10, 50]);
+    trackedChapterCheckpointRef.current.delete(99);
+    commitStartedGame(nextGame, 'dev-finale-test');
+    trackedLevelsRef.current = new Set([10, 50]);
+    trackedChapterCheckpointRef.current.delete(99);
+  };
+
   const togglePause = () => {
     if (isVictory) return;
     setAutoPauseReason(null);
     setGame((current) => updateTetrisGame(current, { type: current.status === 'playing' ? 'pause' : 'resume' }));
+  };
+
+  const toggleStageMode = () => {
+    setAutoPauseReason(null);
+    setCollapsed(false);
+    setIsStageMode((value) => !value);
   };
 
   const usePower = (power: TetrisPowerId) => {
@@ -493,9 +588,20 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
     setGame((current) => updateTetrisGame(current, { type: 'usePower', power }));
   };
 
+  const openTetrisFilmHall = () => {
+    setVictoryCutsceneVisible(false);
+    openAchievementDrawer('films');
+  };
+
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null;
     if (target && target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (isStageMode && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setIsStageMode(false);
+      return;
+    }
     if (!keyboardActive) return;
     const key = event.key.toLowerCase();
     const powerButton = TETRIS_POWER_BUTTONS.find((item) => item.key === key);
@@ -531,9 +637,10 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
     setGame((current) => updateTetrisGame(current, action));
   };
 
-  return (
+  const panelMarkup = (
     <div
-      className={`t8-tetris-panel nodrag nopan ${collapsed ? 'is-collapsed' : 'is-expanded'} ${keyboardActive ? 'is-keyboard-active' : ''}`}
+      ref={panelRootRef}
+      className={`t8-tetris-panel nodrag nopan ${collapsed ? 'is-collapsed' : 'is-expanded'} ${isStageMode ? 'is-stage-mode' : ''} ${keyboardActive ? 'is-keyboard-active' : ''}`}
       data-canvas-floating-ui="tetris-panel"
       data-tetris-interaction-surface="true"
       onPointerDownCapture={stopTetrisCanvasGesture}
@@ -566,7 +673,7 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
         onToggle={() => setCollapsed((value) => !value)}
       />
 
-      {!collapsed && (
+      {(!collapsed || isStageMode) && (
         <section
           id="t8-tetris-panel"
           className={`t8-tetris-panel__panel ${game.status === 'paused' ? 'is-paused' : ''} ${game.status === 'game-over' ? 'is-game-over' : ''} ${isVictory ? 'is-victory' : ''} ${missionComplete ? 'has-mission-complete' : ''} ${feedbackPanelClass}`}
@@ -576,7 +683,7 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
             <span><b>{game.score}</b><small>SCORE</small></span>
             <span><b>{game.level}</b><small>LEVEL</small></span>
             <span><b>{game.lines}</b><small>LINES</small></span>
-            <span><b>{formatSpeed(fallInterval)}</b><small>SPEED</small></span>
+            <span><b>{formatSpeed(speedMultiplier)}</b><small>SPEED</small></span>
           </div>
 
           <div className="t8-tetris-panel__body">
@@ -685,28 +792,29 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
                   <span>POWER</span>
                 <strong><Zap size={11} />{game.energy}</strong>
               </div>
-              <small className="t8-tetris-panel__power-note">{TETRIS_POWER_COST_LABEL}，消行/任务充能，亮起可释放</small>
-              <div className="t8-tetris-panel__power-grid">
-                {TETRIS_POWER_BUTTONS.map((powerButton) => {
-                  const { id, icon: Icon, hint, key: hotkey } = powerButton;
-                  const power = TETRIS_POWERS[id];
-                  const usable = canUseTetrisPower(game, id);
-                  return (
+                  <small className="t8-tetris-panel__power-note">技能需 {powerCostSummary} POWER，随关卡上涨，亮起可释放</small>
+                  <div className="t8-tetris-panel__power-grid">
+                    {TETRIS_POWER_BUTTONS.map((powerButton) => {
+                      const { id, icon: Icon, hint, key: hotkey } = powerButton;
+                      const power = TETRIS_POWERS[id];
+                      const powerCost = getTetrisPowerCost(id, game.level);
+                      const usable = canUseTetrisPower(game, id);
+                      return (
                     <button
                       key={id}
                       type="button"
                       className="t8-tetris-panel__power-button"
-                      disabled={!usable}
-                      onClick={() => usePower(id)}
-                      title={`${power.label} · 快捷键 ${hotkey} · ${power.cost} POWER · ${hint}`}
-                      data-power={id}
-                      data-locked="0"
-                    >
-                      <kbd className="t8-tetris-panel__power-hotkey">{hotkey}</kbd>
-                      <Icon size={12} />
-                      <span>{power.shortLabel}</span>
-                      <small className="t8-tetris-panel__power-cost">{power.cost} POWER</small>
-                    </button>
+                          disabled={!usable}
+                          onClick={() => usePower(id)}
+                          title={`${power.label} · 快捷键 ${hotkey} · ${powerCost} POWER · ${hint}`}
+                          data-power={id}
+                          data-locked="0"
+                        >
+                          <kbd className="t8-tetris-panel__power-hotkey">{hotkey}</kbd>
+                          <Icon size={12} />
+                          <span>{power.shortLabel}</span>
+                          <small className="t8-tetris-panel__power-cost">{powerCost} POWER</small>
+                        </button>
                   );
                 })}
               </div>
@@ -746,12 +854,22 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
               aria-label="选择俄罗斯方块重开点"
             >
               <option value={1}>Lv1 新局</option>
-              {checkpoints.map((checkpoint) => (
+              {checkpointOptions.map((checkpoint) => (
                 <option key={checkpoint.level} value={checkpoint.level}>
                   {checkpointOptionLabel(checkpoint)}
                 </option>
               ))}
             </select>
+            {TETRIS_DEV_FINALE_TEST && (
+              <button
+                type="button"
+                className="t8-tetris-panel__dev-finale"
+                onClick={startFinaleTestGame}
+                title="开发测试：跳到 Lv99 彩蛋终章，任务差 1 点完成，便于验证通关结算和隐藏影片解锁"
+              >
+                Lv99 测试
+              </button>
+            )}
           </div>
 
           <div className="t8-tetris-panel__actions">
@@ -767,13 +885,85 @@ export default function TetrisPanel({ visualStyle, viewportMoving, nodeDragging 
               <RotateCcw size={13} />
               <span>重开</span>
             </button>
-            <button type="button" onClick={() => setCollapsed(true)} title="折叠">
+            <button
+              type="button"
+              onClick={() => {
+                setIsStageMode(false);
+                setCollapsed(true);
+              }}
+              title="折叠"
+            >
               <Square size={12} />
               <span>折叠</span>
+            </button>
+            <button
+              type="button"
+              className="t8-tetris-panel__stage-mode"
+              onClick={toggleStageMode}
+              title={isStageMode ? '退出大屏模式' : '打开大屏模式'}
+              aria-pressed={isStageMode}
+            >
+              {isStageMode ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+              <span>{isStageMode ? '退出' : '大屏'}</span>
             </button>
           </div>
         </section>
       )}
     </div>
+  );
+
+  const renderedPanel = isStageMode && typeof document !== 'undefined'
+    ? createPortal(panelMarkup, document.body)
+    : panelMarkup;
+
+  const victoryCutsceneMarkup = victoryCutsceneVisible && typeof document !== 'undefined'
+    ? createPortal(
+      <div
+        className="t8-tetris-victory-cutscene"
+        role="dialog"
+        aria-modal="true"
+        aria-label="俄罗斯方块通关隐藏影片解锁过场"
+      >
+        <div className="t8-tetris-victory-cutscene__matrix" aria-hidden="true">
+          {Array.from({ length: 32 }).map((_, index) => (
+            <i key={index} />
+          ))}
+        </div>
+        <section className="t8-tetris-victory-cutscene__card">
+          <div className="t8-tetris-victory-cutscene__halo" aria-hidden="true" />
+          <div className="t8-tetris-victory-cutscene__stack" aria-hidden="true">
+            {Array.from({ length: 18 }).map((_, index) => (
+              <i key={index} />
+            ))}
+          </div>
+          <p className="t8-tetris-victory-cutscene__eyebrow">Lv99 FINALE COMPLETE</p>
+          <h2>ALL CLEAR</h2>
+          <strong>俄罗斯方块隐藏影片已解锁</strong>
+          <p>
+            彩色方块完成最后一次消行，彩蛋通道已经点亮。可以去成就影片馆解锁隐藏视频观看。
+          </p>
+          <div className="t8-tetris-victory-cutscene__timer" aria-label="10秒通关仪式动画">
+            <span>10 秒仪式过场</span>
+            <i />
+          </div>
+          <div className="t8-tetris-victory-cutscene__actions">
+            <button type="button" onClick={() => setVictoryCutsceneVisible(false)}>
+              回到画布
+            </button>
+            <button type="button" onClick={openTetrisFilmHall}>
+              去成就影片馆
+            </button>
+          </div>
+        </section>
+      </div>,
+      document.body,
+    )
+    : null;
+
+  return (
+    <>
+      {renderedPanel}
+      {victoryCutsceneMarkup}
+    </>
   );
 }

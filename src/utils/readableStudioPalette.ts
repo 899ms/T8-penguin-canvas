@@ -30,9 +30,6 @@ export interface ReadableStudioPalette {
 
 const DARK_TEXT = '#06111f';
 const LIGHT_TEXT = '#f8fafc';
-const PIXEL_TEXT = 'var(--px-ink)';
-const PIXEL_SUB_TEXT = 'var(--px-ink-soft)';
-const PIXEL_INVERSE_TEXT = 'var(--px-surface)';
 
 function clampChannel(value: number) {
   return Math.max(0, Math.min(255, value));
@@ -116,18 +113,18 @@ function softTextFor(textColor: string) {
 export function createReadableStudioPalette(input: ReadableStudioPaletteInput): ReadableStudioPalette {
   if (input.isPixel) {
     return {
-      accentText: PIXEL_INVERSE_TEXT,
-      headerText: PIXEL_TEXT,
-      headerSubText: PIXEL_SUB_TEXT,
-      surfaceText: PIXEL_TEXT,
-      surfaceStrongText: PIXEL_TEXT,
+      accentText: readableTextOn(input.accent, input.isDark),
+      headerText: readableTextOn(input.surfaceStrong, input.isDark),
+      headerSubText: input.isDark ? 'rgba(248,250,252,0.78)' : 'rgba(6,17,31,0.76)',
+      surfaceText: input.isDark ? LIGHT_TEXT : DARK_TEXT,
+      surfaceStrongText: readableTextOn(input.surfaceStrong, input.isDark),
       controlBg: input.isDark ? 'rgba(15,23,42,0.92)' : 'rgba(255,255,255,0.96)',
       controlText: input.isDark ? '#e5f2ff' : '#111827',
       noticeBg: 'var(--px-yellow)',
-      noticeText: PIXEL_TEXT,
-      noticeSubText: PIXEL_SUB_TEXT,
+      noticeText: input.isDark ? LIGHT_TEXT : DARK_TEXT,
+      noticeSubText: input.isDark ? 'rgba(248,250,252,0.78)' : 'rgba(6,17,31,0.76)',
       noticeBorder: input.border,
-      dangerText: LIGHT_TEXT,
+      dangerText: readableTextOn(input.danger, input.isDark),
     };
   }
 

@@ -34,18 +34,37 @@ test('achievement manifest gives every system theme time milestones and featured
   assert.ok(tetris.featured.some((item: any) => item.idSuffix === 'chapter-one'));
   assert.ok(tetris.featured.some((item: any) => item.idSuffix === 'chapter-five'));
   assert.ok(tetris.featured.some((item: any) => item.idSuffix === 'clean-lv30'));
+  assert.ok(tetris.featured.some((item: any) => item.idSuffix === 'matrix-cinema' && item.rarity === 'hidden'));
   assert.equal(
     manifest.films.find((film: any) => film.id === 'film-saint-seiya-01').unlockAchievementId,
     'saint-seiya-athena-return',
   );
-  assert.equal(manifest.films.length, 5);
-  assert.equal(manifest.films.every((film: any) => film.lockedText === '待解锁'), true);
+  assert.equal(
+    manifest.films.find((film: any) => film.id === 'film-tetris-01').unlockAchievementId,
+    'tetris-matrix-cinema',
+  );
+  assert.equal(manifest.films.length, 6);
+  assert.equal(manifest.films.every((film: any) => typeof film.lockedText === 'string' && film.lockedText.length > 0), true);
   assert.equal(manifest.films.every((film: any) => film.unavailableText === '影片素材待提供'), true);
 
   const source = read('../src/data/achievementManifest.ts');
   assert.match(source, /buildAchievementDefinitions/);
   assert.match(source, /\$\{theme\.style\}-time-\$\{milestone\.key\}/);
   assert.match(source, /normalizeAchievementTheme/);
+});
+
+test('Tetris victory unlocks a 10-second cinematic bridge into the achievement film hall', () => {
+  const component = read('../src/components/TetrisPanel.tsx');
+  const css = read('../src/styles/theme-tetris.css');
+
+  assert.match(component, /TETRIS_VICTORY_CUTSCENE_MS\s*=\s*10_000/);
+  assert.match(component, /victoryCutsceneVisible/);
+  assert.match(component, /t8-tetris-victory-cutscene/);
+  assert.match(component, /openAchievementDrawer\('films'\)/);
+  assert.match(component, /成就影片馆/);
+  assert.match(css, /\.t8-tetris-victory-cutscene/);
+  assert.match(css, /tetris-victory-cutscene-matrix/);
+  assert.match(css, /10s\s+linear\s+forwards/);
 });
 
 test('Saint Seiya theme is a full-canvas sanctuary skin, not only a floating panel', () => {
@@ -429,21 +448,21 @@ test('achievement backend records active time, hidden mode, and film placeholder
   assert.ok(profile.data.profile.unlockedAchievements['tetris-chapter-five']);
   assert.ok(profile.data.profile.unlockedAchievements['tetris-chapter-50']);
   assert.ok(profile.data.profile.unlockedAchievements['tetris-finale']);
+  assert.ok(profile.data.profile.unlockedAchievements['tetris-matrix-cinema']);
   assert.ok(profile.data.profile.unlockedAchievements['tetris-clean-lv30']);
-  assert.equal(profile.data.profile.unlockedFilms['film-rh-01'].hasMedia, false);
-  assert.equal(profile.data.profile.unlockedFilms['film-rh-01'].status, 'awaiting-media');
-  assert.equal(profile.data.profile.unlockedFilms['film-rh-01'].unavailableText, '影片素材待提供');
-  assert.equal(profile.data.profile.unlockedFilms['film-dragon-ball-01'].status, 'awaiting-media');
-  assert.equal(profile.data.profile.unlockedFilms['film-saint-seiya-01'].hasMedia, true);
-  assert.equal(profile.data.profile.unlockedFilms['film-saint-seiya-01'].status, 'ready');
-  assert.equal(profile.data.profile.unlockedFilms['film-saint-seiya-01'].mime, 'video/mp4');
-  assert.match(profile.data.profile.unlockedFilms['film-saint-seiya-01'].mediaUrl, /\/api\/achievements\/films\/film-saint-seiya-01\/media/);
-  const mediaRes = await fetch(`${base}${profile.data.profile.unlockedFilms['film-saint-seiya-01'].mediaUrl}`, {
-    headers: { Range: 'bytes=0-31' },
-  });
-  assert.equal(mediaRes.status, 206);
-  assert.match(mediaRes.headers.get('content-type') || '', /video\/mp4/);
-  assert.match(Buffer.from(await mediaRes.arrayBuffer()).toString('latin1'), /ftyp/);
+  for (const filmId of ['film-rh-01', 'film-dragon-ball-01', 'film-saint-seiya-01', 'film-tetris-01']) {
+    const film = profile.data.profile.unlockedFilms[filmId];
+    assert.equal(film.hasMedia, true, `${filmId} should have encrypted media`);
+    assert.equal(film.status, 'ready');
+    assert.equal(film.mime, 'video/mp4');
+    assert.match(film.mediaUrl, new RegExp(`/api/achievements/films/${filmId}/media`));
+    const mediaRes = await fetch(`${base}${film.mediaUrl}`, {
+      headers: { Range: 'bytes=0-31' },
+    });
+    assert.equal(mediaRes.status, 206);
+    assert.match(mediaRes.headers.get('content-type') || '', /video\/mp4/);
+    assert.match(Buffer.from(await mediaRes.arrayBuffer()).toString('latin1'), /ftyp/);
+  }
   assert.ok(profile.data.summary.dailyTasks.length > 0);
   assert.ok(profile.data.summary.weeklyPassport.completedThemeCount >= 3);
   assert.equal(profile.data.summary.creativeReview.topTheme.theme, 'tech');
@@ -641,6 +660,7 @@ test('achievement frontend and server are wired without recording prompt content
   assert.match(drawer, /隐藏任务/);
   assert.match(drawer, /奖励影片/);
   assert.match(drawer, /t8-achievement-film-stage/);
+  assert.match(drawer, /data-film-theme/);
   assert.match(drawer, /openFilmStage/);
   assert.match(drawer, /achievementFilmMediaUrl/);
   assert.match(drawer, /hiddenModeHint/);
@@ -680,7 +700,12 @@ test('achievement frontend and server are wired without recording prompt content
   assert.match(media, /T8MEDIA1/);
   assert.match(media, /encryptAchievementMediaBuffer/);
   assert.match(media, /decryptAchievementMediaFile/);
+  assert.match(media, /film-tech-01\.mp4\.t8media/);
+  assert.match(media, /film-rh-01\.mp4\.t8media/);
+  assert.match(media, /film-yyh-01\.mp4\.t8media/);
+  assert.match(media, /film-dragon-ball-01\.mp4\.t8media/);
   assert.match(media, /film-saint-seiya-01\.mp4\.t8media/);
+  assert.match(media, /film-tetris-01\.mp4\.t8media/);
   assert.match(store, /const event = \{/);
   assert.match(store, /ignoredReason:\s*'achievement-tracking-disabled'/);
   assert.match(store, /mediaStatusForFilm/);
