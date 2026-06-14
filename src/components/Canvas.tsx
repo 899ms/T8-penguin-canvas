@@ -1224,6 +1224,18 @@ function centerOfMaterialNodes(nodes: Node[]): { x: number; y: number } | null {
   return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
 }
 
+function centerOfNavigableNodes(nodes: Node[]): { x: number; y: number } {
+  const valid = (node: Node, includeGroups: boolean) => {
+    if (!node.id || node.id === BULK_PHANTOM_ID) return false;
+    if ((node as any).hidden) return false;
+    if (!includeGroups && node.type === 'groupBox') return false;
+    return true;
+  };
+  const normalNodes = nodes.filter((node) => valid(node, false));
+  const fallbackNodes = normalNodes.length > 0 ? normalNodes : nodes.filter((node) => valid(node, true));
+  return centerOfMaterialNodes(fallbackNodes) || { x: 0, y: 0 };
+}
+
 // 把所有节点类型都注册到对应组件(已实现的用业务组件,其余用 Placeholder)
 const nodeTypes = NODE_REGISTRY.reduce<Record<string, any>>((acc, m) => {
   acc[m.type] = withNodeSerialBadge(SPECIFIC_NODES[m.type] || PlaceholderNode);
@@ -6117,9 +6129,9 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
 
   const focusCanvasCenter = useCallback(() => {
     if (!loaded || loadedCanvasId !== activeId) return;
-    const currentZoom = getViewport().zoom || 1;
-    const zoom = Math.min(Math.max(currentZoom, 0.55), 1.15);
-    setCenter(0, 0, { zoom, duration: 420 });
+    const center = centerOfNavigableNodes(nodesRef.current);
+    const { zoom } = getViewport();
+    setCenter(center.x, center.y, { zoom, duration: 420 });
   }, [activeId, getViewport, loaded, loadedCanvasId, setCenter]);
 
   const focusNodeBySerialId = useCallback(() => {

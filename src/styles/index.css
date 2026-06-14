@@ -23,12 +23,12 @@ html[data-theme-style] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-
 html[data-theme-visual] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button,
 .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button {
   width: 100% !important;
-  height: 32px !important;
-  min-height: 32px !important;
+  height: auto !important;
+  min-height: 42px !important;
   display: flex !important;
   align-items: center !important;
-  justify-content: center !important;
-  padding: 0 28px 0 8px !important;
+  justify-content: flex-start !important;
+  padding: 7px 30px 7px 10px !important;
   border: 1px solid var(--rh-toolbox-app-border, var(--t8-border, rgba(0, 0, 0, .18))) !important;
   border-radius: 6px !important;
   background: var(--rh-toolbox-app-bg, var(--t8-bg-panel-elevated, #fff7ed)) !important;
@@ -38,8 +38,22 @@ html[data-theme-visual] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox
   font-size: 11px !important;
   font-weight: 600 !important;
   line-height: 1.15 !important;
-  text-align: center !important;
+  text-align: left !important;
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease !important;
+}
+
+html[data-theme-template] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button .rh-toolbox-app-title,
+html[data-theme-style] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button .rh-toolbox-app-title,
+html[data-theme-visual] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button .rh-toolbox-app-title,
+.react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button .rh-toolbox-app-title {
+  min-width: 0 !important;
+  width: 100% !important;
+  display: -webkit-box !important;
+  overflow: hidden !important;
+  -webkit-box-orient: vertical !important;
+  -webkit-line-clamp: 2 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
 }
 
 html[data-theme-template] .react-flow__node .rh-toolbox-app-grid button.rh-toolbox-app-button:hover,
@@ -4693,7 +4707,8 @@ html[data-theme-mode="light"] .anime-tag-master-lightbox-backdrop {
 }
 
 .anime-tag-master-selected img,
-.anime-tag-master-selected-placeholder {
+.anime-tag-master-selected-placeholder,
+.anime-tag-master-selected .anime-tag-master-no-image {
   width: 84px;
   height: 84px;
   border: 2px solid var(--atm-border);
@@ -4952,14 +4967,23 @@ html[data-theme-mode="light"] .anime-tag-master-lightbox-backdrop {
 
 .anime-tag-master-thumb-button img,
 .anime-tag-master-no-image {
+  display: block;
   width: 100%;
   height: 180px;
   object-fit: cover;
 }
 
 .anime-tag-master-no-image {
+  display: grid;
   background: color-mix(in srgb, var(--atm-panel-strong) 44%, var(--atm-panel));
   font-weight: 900;
+}
+
+.anime-tag-master-grid .anime-tag-master-no-image {
+  width: 100%;
+  height: auto;
+  min-height: 112px;
+  aspect-ratio: 1;
 }
 
 .anime-tag-master-card-body,

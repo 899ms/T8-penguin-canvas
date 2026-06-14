@@ -269,17 +269,12 @@ export function searchArtistStyles(items: readonly ArtistStyleItem[], options: A
   return typeof limit === 'number' ? matches.slice(0, limit) : matches;
 }
 
+const ARTIST_STYLE_REFERENCE_SUFFIX =
+  'Use this as a visual style reference: composition language, line quality, color palette, lighting, texture, mood and design rhythm.';
+
 export function buildArtistStylePrompt(item: ArtistStyleItem): string {
-  const tags = uniqueStrings(item.tags as string[]).slice(0, 10).join(', ');
-  return [
-    `Artist style reference: ${item.name} (${item.chineseName})`,
-    `Movement: ${item.movement} / ${item.movementZh}`,
-    `Visual cue: ${item.cue}`,
-    tags ? `Style tags: ${tags}` : '',
-    'Use this as a visual style reference: composition language, line quality, color palette, lighting, texture, mood and design rhythm.',
-  ]
-    .filter(Boolean)
-    .join('\n');
+  const styleCue = textOf(item.cue) || textOf(item.displayName) || textOf(item.chineseName) || textOf(item.name);
+  return [styleCue, ARTIST_STYLE_REFERENCE_SUFFIX].filter(Boolean).join(', ');
 }
 
 export function buildArtistStyleOutputPayload(item: ArtistStyleItem, mode: ArtistStyleOutputMode): ArtistStyleOutputPayload {

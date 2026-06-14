@@ -300,7 +300,7 @@ export function buildAnimeTagTextOutputPayload(item: AnimeTagItem): AnimeTagOutp
 
 export function buildAnimeTagImageOutputPayload(item: AnimeTagItem): AnimeTagOutputPayload {
   const prompt = buildAnimeTagPrompt(item);
-  const imageUrl = textOf(item.imageUrl);
+  const imageUrl = getAnimeTagFullImageUrl(item);
   return {
     kind: 'image',
     data: {
@@ -421,11 +421,159 @@ export function buildAnimeTagProxySearchUrl(
   return `/api/anime-tags/search?${params.toString()}`;
 }
 
+export function normalizeAnimeTagPreviewQuery(value: string): string {
+  const first = textOf(value)
+    .replace(/^@+/, '')
+    .replace(/^artist:/i, '')
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/[,\n，、]/)
+    .map((item) => item.trim())
+    .find(Boolean) || '';
+  return first
+    .replace(/:[0-9.]+$/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+export function pickAnimeTagPreviewQuery(item?: AnimeTagItem | null): string {
+  if (!item) return '';
+  const candidates = uniqueStrings([
+    ...(Array.isArray(item.tags) ? item.tags : []),
+    item.name,
+    item.prompt,
+    item.chineseName,
+  ]);
+  for (const candidate of candidates) {
+    const normalized = normalizeAnimeTagPreviewQuery(candidate);
+    if (normalized && !/[\u4e00-\u9fa5]/.test(normalized)) return normalized;
+  }
+  return normalizeAnimeTagPreviewQuery(item.name || '1girl') || '1girl';
+}
+
+export function buildAnimeTagPreviewUrl(
+  provider: AnimeTagOnlineProvider['id'],
+  query: string,
+  options: OnlineSearchOptions = {},
+): string {
+  const params = new URLSearchParams({
+    provider,
+    q: normalizeAnimeTagPreviewQuery(query) || '1girl',
+    safe: options.safe === false ? '0' : '1',
+  });
+  return `/api/anime-tags/preview?${params.toString()}`;
+}
+
 function normalizeRemoteImageUrl(value: unknown): string {
   const url = textOf(value);
   if (!url) return '';
   if (url.startsWith('//')) return `https:${url}`;
   return url;
+}
+
+function escapeSvgText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function shortLabel(value: string, max = 20): string {
+  const text = value.trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+function categoryPreviewColors(categoryId: string) {
+  const palettes: Record<string, { a: string; b: string; c: string }> = {
+    character: { a: '#22d3ee', b: '#a78bfa', c: '#f472b6' },
+    pose: { a: '#fb923c', b: '#facc15', c: '#34d399' },
+    expression: { a: '#f472b6', b: '#fde047', c: '#60a5fa' },
+    outfit: { a: '#38bdf8', b: '#c084fc', c: '#fb7185' },
+    composition: { a: '#2dd4bf', b: '#60a5fa', c: '#facc15' },
+    style: { a: '#a78bfa', b: '#f0abfc', c: '#22d3ee' },
+    lighting: { a: '#f59e0b', b: '#fde68a', c: '#38bdf8' },
+    quality: { a: '#34d399', b: '#fbbf24', c: '#818cf8' },
+    negative: { a: '#94a3b8', b: '#475569', c: '#f87171' },
+  };
+  return palettes[categoryId] || { a: '#22c55e', b: '#38bdf8', c: '#facc15' };
+}
+
+export function buildAnimeTagProxyImageUrl(imageUrl: string): string {
+  const url = normalizeRemoteImageUrl(imageUrl);
+  if (!url) return '';
+  if (url.startsWith('/api/anime-tags/image?')) return url;
+  if (!/^https?:\/\//i.test(url)) return url;
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    const supported = hostname === 'cdn.donmai.us'
+      || hostname === 'danbooru.donmai.us'
+      || hostname === 'gelbooru.com'
+      || hostname.endsWith('.donmai.us')
+      || hostname.endsWith('.gelbooru.com');
+    return supported ? `/api/anime-tags/image?u=${encodeURIComponent(parsed.toString())}` : url;
+  } catch {
+    return url;
+  }
+}
+
+export function createAnimeTagPreviewFallbackSvg(item?: Pick<AnimeTagItem, 'name' | 'chineseName' | 'categoryId' | 'categoryName' | 'tags'> | null): string {
+  const name = shortLabel(textOf(item?.name) || 'anime tag', 24);
+  const chineseName = shortLabel(textOf(item?.chineseName) || name, 16);
+  const category = shortLabel(textOf(item?.categoryName) || '动漫标签', 12);
+  const tagLines = uniqueStrings(Array.isArray(item?.tags) ? [...item.tags] : [])
+    .slice(0, 5)
+    .map((tag) => shortLabel(tag.replace(/_/g, ' '), 17));
+  const colors = categoryPreviewColors(textOf(item?.categoryId));
+  const chips = tagLines.map((tag, index) => {
+    const y = 238 + index * 32;
+    const width = Math.min(252, Math.max(96, tag.length * 11 + 34));
+    return `<g opacity="${index > 3 ? '0.74' : '0.92'}"><rect x="38" y="${y}" width="${width}" height="22" rx="11" fill="rgba(255,255,255,0.16)" stroke="rgba(255,255,255,0.22)"/><text x="52" y="${y + 16}" font-size="13" fill="#eaf6ff">${escapeSvgText(tag)}</text></g>`;
+  }).join('');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="360" height="360" viewBox="0 0 360 360">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08111f"/>
+      <stop offset="0.48" stop-color="${colors.a}"/>
+      <stop offset="1" stop-color="#101827"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="${colors.b}"/>
+      <stop offset="1" stop-color="${colors.c}"/>
+    </linearGradient>
+    <pattern id="dots" width="22" height="22" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="3" r="1.4" fill="rgba(255,255,255,0.3)"/>
+    </pattern>
+  </defs>
+  <rect width="360" height="360" rx="22" fill="url(#bg)"/>
+  <rect width="360" height="360" rx="22" fill="url(#dots)" opacity="0.55"/>
+  <circle cx="282" cy="72" r="58" fill="${colors.c}" opacity="0.28"/>
+  <circle cx="78" cy="292" r="88" fill="#020617" opacity="0.28"/>
+  <g transform="translate(58 58)" opacity="0.96">
+    <rect x="32" y="0" width="72" height="72" rx="12" fill="${colors.a}" stroke="#eaf6ff" stroke-width="4"/>
+    <rect x="106" y="0" width="72" height="72" rx="12" fill="${colors.b}" stroke="#eaf6ff" stroke-width="4"/>
+    <rect x="69" y="74" width="72" height="72" rx="12" fill="${colors.c}" stroke="#eaf6ff" stroke-width="4"/>
+    <rect x="143" y="74" width="72" height="72" rx="12" fill="#111827" stroke="#eaf6ff" stroke-width="4" opacity="0.86"/>
+  </g>
+  <rect x="28" y="184" width="304" height="38" rx="19" fill="url(#chip)" opacity="0.94"/>
+  <text x="180" y="210" text-anchor="middle" font-size="21" font-weight="800" fill="#07111f">${escapeSvgText(chineseName)}</text>
+  <text x="30" y="38" font-size="15" font-weight="800" fill="#ecfeff">${escapeSvgText(category)}</text>
+  <text x="30" y="332" font-size="15" font-weight="800" fill="#eaf6ff" opacity="0.9">${escapeSvgText(name)}</text>
+  ${chips}
+</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+export function getAnimeTagPreviewImageUrl(item?: AnimeTagItem | null): string {
+  if (!item) return '';
+  const imageUrl = textOf(item.thumbnailUrl) || textOf(item.imageUrl);
+  return imageUrl ? buildAnimeTagProxyImageUrl(imageUrl) : createAnimeTagPreviewFallbackSvg(item);
+}
+
+export function getAnimeTagFullImageUrl(item?: AnimeTagItem | null): string {
+  if (!item) return '';
+  const imageUrl = textOf(item.imageUrl) || textOf(item.thumbnailUrl);
+  return imageUrl ? buildAnimeTagProxyImageUrl(imageUrl) : createAnimeTagPreviewFallbackSvg(item);
 }
 
 export function mapDanbooruPostToAnimeTagItem(post: any, query: string): AnimeTagItem {

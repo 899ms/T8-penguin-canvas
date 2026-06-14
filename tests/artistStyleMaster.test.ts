@@ -73,14 +73,15 @@ test('artist style search, prompt output and import/export are deterministic', (
 
   const mucha = matches.find((item) => item.id === 'alphonse-mucha')!;
   const prompt = buildArtistStylePrompt(mucha);
-  assert.match(prompt, /Alphonse Mucha/);
-  assert.match(prompt, /阿尔丰斯·穆夏/);
-  assert.match(prompt, /Art Nouveau/);
   assert.match(prompt, /装饰线条/);
+  assert.match(prompt, /Use this as a visual style reference/);
+  assert.equal(prompt.includes('\n'), false);
+  assert.doesNotMatch(prompt, /Artist style reference|Movement:|Visual cue:|Style tags:/);
+  assert.equal(prompt, `${mucha.cue}, Use this as a visual style reference: composition language, line quality, color palette, lighting, texture, mood and design rhythm.`);
 
   const textPayload = buildArtistStyleOutputPayload(mucha, 'prompt');
   assert.equal(textPayload.kind, 'text');
-  assert.match(textPayload.data.directOutputText, /Alphonse Mucha/);
+  assert.equal(textPayload.data.directOutputText, prompt);
   assert.equal(textPayload.data.directImageUrl, undefined);
 
   const imagePayload = buildArtistStyleOutputPayload(mucha, 'image');
@@ -88,7 +89,7 @@ test('artist style search, prompt output and import/export are deterministic', (
   assert.match(imagePayload.data.directImageUrl, /alphonse-mucha\.webp$/);
   assert.deepEqual(imagePayload.data.directImageUrls, [mucha.imageUrl]);
   assert.deepEqual(imagePayload.data.imageUrls, [mucha.imageUrl]);
-  assert.match(imagePayload.data.directOutputText, /Alphonse Mucha/);
+  assert.equal(imagePayload.data.directOutputText, prompt);
 
   const custom = normalizeArtistStyleItem({
     name: 'Studio Test',

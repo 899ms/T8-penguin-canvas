@@ -762,7 +762,7 @@ const RHToolboxNode = ({ id, data, selected }: NodeProps) => {
           <div className="h-full flex items-center justify-center text-[11px]" style={{ color: subText }}>无匹配工具</div>
         ) : (
           <div
-            className="rh-toolbox-app-grid grid grid-cols-2 gap-2"
+            className="rh-toolbox-app-grid grid grid-cols-1 gap-2"
             style={{
               '--rh-toolbox-app-bg': bg,
               '--rh-toolbox-app-hover-bg': surface,
@@ -780,7 +780,7 @@ const RHToolboxNode = ({ id, data, selected }: NodeProps) => {
                   title={tool.description || tool.title}
                   className="nodrag rh-toolbox-app-button"
                 >
-                  <span className="min-w-0 truncate">{tool.title}</span>
+                  <span className="rh-toolbox-app-title">{tool.title}</span>
                 </button>
                 {import.meta.env.DEV && (
                   <button

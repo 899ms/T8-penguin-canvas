@@ -6,14 +6,18 @@ import {
   ANIME_TAG_MASTER_STORAGE_KEY,
   ANIME_TAG_ONLINE_PROVIDERS,
   buildAnimeTagImageOutputPayload,
+  buildAnimeTagPreviewUrl,
+  buildAnimeTagProxyImageUrl,
   buildAnimeTagProxySearchUrl,
   buildAnimeTagPrompt,
   buildDanbooruPostsUrl,
   buildGelbooruPostsUrl,
   createAnimeTagExport,
+  getAnimeTagPreviewImageUrl,
   createAnimeTagFromMaterial,
   importAnimeTagExport,
   normalizeAnimeTagItem,
+  pickAnimeTagPreviewQuery,
   searchAnimeTags,
   upsertAnimeTagInLibrary,
 } from '../src/utils/animeTagMaster.ts';
@@ -46,6 +50,11 @@ test('anime tag master is registered in the Inspiration category', () => {
   assert.match(server, /\/api\/anime-tags/);
   assert.match(backendRoute, /Gelbooru DAPI 需要 user_id\/api_key/);
   assert.match(backendRoute, /searchGelbooruHtml/);
+  assert.match(backendRoute, /\/preview/);
+  assert.match(backendRoute, /previewDanbooru/);
+  assert.match(backendRoute, /previewGelbooru/);
+  assert.match(backendRoute, /fallbackProvider/);
+  assert.match(backendRoute, /Danbooru 预览失败，已切换 Gelbooru 实时预览/);
   assert.match(backendRoute, /\/image/);
   assert.match(features, /animeTagMasterNode/);
   assert.match(features, /"type":\s*"anime-tag-master"/);
@@ -95,6 +104,25 @@ test('anime tag master lazy-loads Danbooru and Gelbooru/Galbooru online librarie
 
   const proxyUrl = buildAnimeTagProxySearchUrl('gelbooru', '1girl', { limit: 6 });
   assert.equal(proxyUrl, '/api/anime-tags/search?provider=gelbooru&q=1girl&limit=6&safe=1');
+
+  const previewUrl = buildAnimeTagPreviewUrl('danbooru', '@hatsune miku, smile', { safe: true });
+  assert.equal(previewUrl, '/api/anime-tags/preview?provider=danbooru&q=hatsune_miku&safe=1');
+
+  const previewQuery = pickAnimeTagPreviewQuery({
+    id: 'builtin-1',
+    name: '少女主视觉海报',
+    chineseName: '少女主视觉海报',
+    categoryId: 'character',
+    categoryName: '角色人设',
+    tags: ['1girl', 'solo'],
+    prompt: 'anime key visual',
+    negativePrompt: '',
+    source: 'builtin',
+    imageUrl: '',
+    attributes: '',
+    userCreated: false,
+  });
+  assert.equal(previewQuery, '1girl');
 });
 
 test('anime tag image output carries standard image fields', () => {
@@ -113,6 +141,27 @@ test('anime tag image output carries standard image fields', () => {
   assert.deepEqual(payload.data.directImageUrls, ['/anime-tags/sakura-miku.webp']);
   assert.deepEqual(payload.data.imageUrls, ['/anime-tags/sakura-miku.webp']);
   assert.match(payload.data.directOutputText, /hatsune_miku/);
+});
+
+test('anime tag preview images are proxied or generated without local downloads', () => {
+  const proxied = buildAnimeTagProxyImageUrl('https://cdn.donmai.us/original/sample.jpg');
+  assert.equal(proxied, '/api/anime-tags/image?u=https%3A%2F%2Fcdn.donmai.us%2Foriginal%2Fsample.jpg');
+
+  const builtin = normalizeAnimeTagItem({
+    name: '1girl visual poster',
+    chineseName: '少女主视觉海报',
+    categoryId: 'character',
+    categoryName: '角色人设',
+    tags: ['1girl', 'solo', 'looking_at_viewer'],
+    prompt: '1girl, solo',
+  });
+  const fallbackPreview = getAnimeTagPreviewImageUrl(builtin);
+  assert.match(fallbackPreview, /^data:image\/svg\+xml/);
+
+  const payload = buildAnimeTagImageOutputPayload(builtin);
+  assert.equal(payload.kind, 'image');
+  assert.match(payload.data.directImageUrl, /^data:image\/svg\+xml/);
+  assert.deepEqual(payload.data.directImageUrls, [payload.data.directImageUrl]);
 });
 
 test('anime tag custom library import/export and material conversion are confirmed', () => {
@@ -167,6 +216,10 @@ test('anime tag master frontend keeps compact scrolling, lightbox and theme hook
   assert.match(node, /data-anime-tag-library-modal/);
   assert.match(node, /data-anime-tag-lightbox/);
   assert.match(node, /onWheelCapture=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(node, /AnimeTagPreviewImage/);
+  assert.match(node, /requestLazyPreview/);
+  assert.match(node, /buildAnimeTagPreviewUrl/);
+  assert.doesNotMatch(node, /previewImageOf/);
   assert.match(node, /ArrowRight/);
   assert.match(node, /ArrowLeft/);
   assert.match(node, /Danbooru/);

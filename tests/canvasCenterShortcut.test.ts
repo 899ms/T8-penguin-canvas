@@ -16,7 +16,11 @@ test('Canvas handles the center shortcut outside editable and selected-node cont
   const canvas = readFileSync(new URL('../src/components/Canvas.tsx', import.meta.url), 'utf8');
 
   assert.match(canvas, /const focusCanvasCenter\s*=\s*useCallback\(/);
-  assert.match(canvas, /setCenter\(0,\s*0,\s*\{\s*zoom,\s*duration:\s*420\s*\}\)/);
+  assert.match(canvas, /function centerOfNavigableNodes\(nodes:\s*Node\[\]\):\s*\{\s*x:\s*number;\s*y:\s*number\s*\}/);
+  assert.match(canvas, /const center = centerOfNavigableNodes\(nodesRef\.current\)/);
+  assert.match(canvas, /const \{\s*zoom\s*\} = getViewport\(\)/);
+  assert.match(canvas, /setCenter\(center\.x,\s*center\.y,\s*\{\s*zoom,\s*duration:\s*420\s*\}\)/);
+  assert.doesNotMatch(canvas, /setCenter\(0,\s*0,\s*\{\s*zoom,\s*duration:\s*420\s*\}\)/);
   assert.match(canvas, /matchesAnyShortcut\(shortcuts\['canvas\.center-view'\],\s*e\)/);
   assert.match(canvas, /if\s*\(selectedCount\s*>\s*0\)\s*return;[\s\S]*focusCanvasCenter\(\)/);
 });

@@ -229,12 +229,14 @@ test('RH toolbox service exposes a single callable runner for future quick actio
   assert.match(component, /RH_TOOLBOX_MAJOR_CATEGORIES/);
   assert.match(component, /rhToolboxMajorCategoryId/);
   assert.match(component, /notifyRhToolboxDeveloperToolEdit/);
-  assert.match(component, /rh-toolbox-app-grid grid grid-cols-2 gap-2/);
+  assert.match(component, /rh-toolbox-app-grid grid grid-cols-1 gap-2/);
   assert.match(component, /rh-toolbox-app-button/);
+  assert.match(component, /rh-toolbox-app-title/);
   assert.match(component, /rh-toolbox-app-edit-button/);
   assert.match(component, /isRhToolboxBuiltinCategoryId/);
   assert.match(component, /visibleCategoryId/);
   assert.match(styles, /\.rh-toolbox-app-grid button\.rh-toolbox-app-button/);
+  assert.match(styles, /-webkit-line-clamp:\s*2 !important/);
   assert.match(styles, /box-shadow:\s*none !important/);
   assert.match(styles, /border-radius:\s*6px !important/);
   assert.match(component, /status !== 'idle'/);
@@ -318,6 +320,47 @@ test('RH toolbox maker rebuilds mappings from the current WebApp snapshot', () =
   assert.match(maker, /rhToolboxMakerFixedParams:\s*\[\]/);
   assert.match(maker, /rhToolboxMakerWebappId:\s*value[\s\S]*rhToolboxMakerAppInfo:\s*undefined[\s\S]*rhToolboxMakerInputs:\s*\[\][\s\S]*rhToolboxMakerUserParams:\s*\[\][\s\S]*rhToolboxMakerFixedParams:\s*\[\]/);
   assert.match(maker, /const mappingsChanged = Boolean\(autoMappings\.addedInputs \|\| autoMappings\.addedParams\)[\s\S]*autoMappings\.inputs\.length !== inputs\.length[\s\S]*autoMappings\.params\.length !== params\.length/);
+});
+
+test('RH toolbox maker keeps each draft tool category independent', () => {
+  const maker = readFileSync(new URL('../src/components/nodes/RHToolboxMakerNode.tsx', import.meta.url), 'utf8');
+
+  assert.match(maker, /function buildUniqueCategoryId/);
+  assert.match(maker, /compactTextHash\(`\$\{majorId\}:\$\{name\}`\)/);
+  assert.doesNotMatch(maker, /cleanId\(category\?\.id \|\| newCategoryId \|\| name, 'custom-rh-tools'\)/);
+  assert.match(maker, /const categoryId = category[\s\S]*buildUniqueCategoryId\(newCategoryId, name, parentId, categories\)/);
+  assert.match(maker, /const patchDraftTool = \(draft: RhToolboxTool, patch: Partial<RhToolboxTool>/);
+  assert.match(maker, /saveRhToolboxDeveloperTool\(nextTool, categories\)/);
+  assert.match(maker, /const firstSubcategory = customCategories\.find\(\(category\) => getRhToolboxCategoryMajorId\(category\) === nextMajorId\)/);
+  assert.match(maker, /保存时按该小类入库/);
+  assert.match(maker, /onChange=\{\(event\) => patchDraftTool\(draft, \{ categoryId: event\.target\.value \}/);
+  assert.match(maker, /保存名称/);
+});
+
+test('RH toolbox maker saves a per-tool default instance type', () => {
+  const maker = readFileSync(new URL('../src/components/nodes/RHToolboxMakerNode.tsx', import.meta.url), 'utf8');
+  const runtime = readFileSync(new URL('../src/components/nodes/RHToolboxNode.tsx', import.meta.url), 'utf8');
+  const service = readFileSync(new URL('../src/services/rhToolbox.ts', import.meta.url), 'utf8');
+
+  assert.match(maker, /instanceType:\s*cleanText\(data\.rhToolboxMakerInstanceType\)/);
+  assert.match(maker, /rhToolboxMakerInstanceType:\s*tool\.runtime\?\.instanceType \|\| ''/);
+  assert.match(maker, /value=\{d\.rhToolboxMakerInstanceType \|\| ''\}/);
+  assert.match(maker, /updateData\(\{ rhToolboxMakerInstanceType: event\.target\.value \}\)/);
+  assert.match(maker, /保存后该应用默认使用所选实例/);
+  assert.match(maker, /<option value="">默认<\/option>/);
+  assert.match(maker, /<option value="plus">plus<\/option>/);
+  assert.match(maker, /<option value="pro">pro<\/option>/);
+  assert.match(runtime, /instanceType:\s*tool\.runtime\?\.instanceType \|\| ''/);
+  assert.match(service, /instanceType:\s*options\.instanceType \|\| tool\.runtime\?\.instanceType \|\| undefined/);
+});
+
+test('RH toolbox developer save persists the selected custom category with each tool', () => {
+  const developer = readFileSync(new URL('../src/utils/rhToolboxDeveloper.ts', import.meta.url), 'utf8');
+
+  assert.match(developer, /isRhToolboxBuiltinCategoryId/);
+  assert.match(developer, /for \(const category of incoming\.categories\)/);
+  assert.match(developer, /category\.id === normalizedTool\.categoryId/);
+  assert.match(developer, /categoryMap\.set\(category\.id, category\)/);
 });
 
 test('RH toolbox developer helpers stay private and runtime uses guarded imports', () => {

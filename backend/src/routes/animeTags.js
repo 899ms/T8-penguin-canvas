@@ -30,6 +30,21 @@ function withSafeTag(query, safe) {
   return /\brating:/i.test(text) ? text : `${text} rating:general`;
 }
 
+function normalizePreviewQuery(value) {
+  const first = String(value || '')
+    .trim()
+    .replace(/^@+/, '')
+    .replace(/^artist:/i, '')
+    .replace(/\([^)]*\)/g, ' ')
+    .split(/[,\n，、]/)
+    .map((item) => item.trim())
+    .find(Boolean) || '';
+  return first
+    .replace(/:[0-9.]+$/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/^_+|_+$/g, '') || '1girl';
+}
+
 function normalizeRemoteUrl(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -222,6 +237,91 @@ async function searchGelbooruHtml(query, { limit, safe }) {
   return rows;
 }
 
+async function previewDanbooru(query, { safe }) {
+  const rows = await searchDanbooru(normalizePreviewQuery(query), { limit: 1, safe });
+  return rows[0] || null;
+}
+
+async function previewGelbooru(query, { safe }) {
+  const normalizedQuery = normalizePreviewQuery(query);
+  try {
+    const rows = await searchGelbooruDapi(normalizedQuery, { limit: 1, safe });
+    if (rows[0]) return { item: rows[0], source: 'api', warning: '' };
+  } catch (error) {
+    const warning = error?.status === 401
+      ? 'Gelbooru DAPI 需要 user_id/api_key，已切换公开 HTML 兜底。'
+      : `Gelbooru DAPI 失败，已切换公开 HTML 兜底：${error?.message || error}`;
+    const htmlRows = await searchGelbooruHtml(normalizedQuery, { limit: 1, safe });
+    return { item: htmlRows[0] || null, source: 'html', warning };
+  }
+  const htmlRows = await searchGelbooruHtml(normalizedQuery, { limit: 1, safe });
+  return { item: htmlRows[0] || null, source: 'html', warning: '' };
+}
+
+router.get('/preview', async (req, res) => {
+  const provider = String(req.query.provider || 'danbooru').trim().toLowerCase();
+  const normalizedProvider = provider === 'galbooru' ? 'gelbooru' : provider;
+  const query = normalizePreviewQuery(req.query.q || req.query.query || '');
+  const safe = req.query.safe !== '0' && req.query.safe !== 'false';
+
+  if (!['danbooru', 'gelbooru'].includes(normalizedProvider)) {
+    return res.status(400).json({ success: false, error: '不支持的在线图库来源' });
+  }
+
+  try {
+    let item = null;
+    let source = 'api';
+    let warning = '';
+    let fallbackProvider = '';
+    if (normalizedProvider === 'gelbooru') {
+      const result = await previewGelbooru(query, { safe });
+      item = result.item;
+      source = result.source;
+      warning = result.warning;
+    } else {
+      try {
+        item = await previewDanbooru(query, { safe });
+      } catch (error) {
+        const result = await previewGelbooru(query, { safe });
+        item = result.item;
+        source = `gelbooru-${result.source}`;
+        fallbackProvider = 'gelbooru';
+        const reason = error?.message || String(error);
+        warning = `Danbooru 预览失败，已切换 Gelbooru 实时预览：${reason}${result.warning ? `；${result.warning}` : ''}`;
+      }
+      if (!item) {
+        const result = await previewGelbooru(query, { safe });
+        item = result.item;
+        source = `gelbooru-${result.source}`;
+        fallbackProvider = 'gelbooru';
+        warning = result.warning
+          ? `Danbooru 暂无结果，已切换 Gelbooru 实时预览；${result.warning}`
+          : 'Danbooru 暂无结果，已切换 Gelbooru 实时预览。';
+      }
+    }
+    return res.json({
+      success: true,
+      data: {
+        provider: normalizedProvider,
+        fallbackProvider,
+        query,
+        source,
+        warning,
+        item,
+        imageUrl: item?.imageUrl || '',
+        thumbnailUrl: item?.thumbnailUrl || item?.imageUrl || '',
+        sourceUrl: item?.sourceUrl || '',
+      },
+    });
+  } catch (error) {
+    return res.status(error?.status || 502).json({
+      success: false,
+      error: error?.message || '在线预览加载失败',
+      code: normalizedProvider === 'danbooru' ? 'danbooru_preview_unavailable' : 'gelbooru_preview_unavailable',
+    });
+  }
+});
+
 router.get('/search', async (req, res) => {
   const provider = String(req.query.provider || 'danbooru').trim().toLowerCase();
   const normalizedProvider = provider === 'galbooru' ? 'gelbooru' : provider;
@@ -307,7 +407,10 @@ router.get('/image', async (req, res) => {
 module.exports = router;
 module.exports._internals = {
   withSafeTag,
+  normalizePreviewQuery,
   extractGelbooruRecords,
   mapGelbooruPost,
+  previewDanbooru,
+  previewGelbooru,
   searchGelbooruHtml,
 };
