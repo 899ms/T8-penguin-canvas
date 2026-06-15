@@ -131,8 +131,9 @@ import {
   appendCreativeDeskItem,
   createCreativeDeskImageItem,
   createDefaultCreativeDeskState,
-  sanitizeCreativeDeskState,
+  migrateCreativeDeskToViewportCoordinates,
 } from '../utils/creativeDesk';
+import { readImageNaturalSize } from '../utils/imageNaturalSize';
 import {
   isConnectionValid,
   getNodeOutputs,
@@ -774,7 +775,7 @@ const INITIAL_DATA: Record<string, Record<string, any>> = {
       rhToolboxMakerShowInNode: true,
       rhToolboxMakerAccent: '#22c55e',
       rhToolboxMakerPollIntervalMs: 5000,
-      rhToolboxMakerMaxPolls: 480,
+      rhToolboxMakerMaxPolls: 720,
       rhToolboxMakerInputs: [
         {
           rowId: 'input-1',
@@ -1605,9 +1606,8 @@ const MODEL_USAGE_HELP_SECTIONS: readonly ModelUsageHelpSection[] = [
     ],
   },
   {
-    title: '图像模型注意事项',
+    title: '图像模型注意事项（2K，4K只有FAL长期稳定，其他都不保证稳定）',
     items: [
-      'gpt-image-2-vip模型（default分组）2026.06.14新增，支持2K，4K，目前稳定速度快，0.1积分',
       'gpt-image-2-all模型（default分组）只能出1K图，速度最快，最稳定，审核最松',
       'gpt-image-2模型（default分组）可以出1K，2K，4K图，2K，4K不一定稳定，如果提示系统错误，降低分辨率重试，超过1K，需要选择分辨率， auto不支持1K以上',
       'gpt-image-2-fal模型，兜底模型，支持2K，4K，价格较贵',
@@ -2272,7 +2272,7 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
         const pendingSave = pendingSaveByCanvasRef.current.get(requestedCanvasId);
         const ns = pendingSave?.nodes || data.nodes || [];
         const es = pendingSave?.edges || data.edges || [];
-        const nextCreativeDesk = pendingSave?.creativeDesk || sanitizeCreativeDeskState(data.creativeDesk);
+        const nextCreativeDesk = pendingSave?.creativeDesk || migrateCreativeDeskToViewportCoordinates(data.creativeDesk, data.viewport);
         const savedNextNodeSerialId = pendingSave?.nextNodeSerialId ?? data.nextNodeSerialId;
         // ⚡ 兑底补丁: 历史画布中可能存在 connectable=false 的旧 groupBox 节点
         // (5656721 事故期间创建的 group), 加载时强制打开可连接以恢复右侧聚合输出口
@@ -2442,10 +2442,10 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
   const getCreativeDeskCenter = useCallback(() => {
     const flowEl = document.querySelector('.react-flow') as HTMLElement | null;
     const rect = flowEl?.getBoundingClientRect();
-    const cx = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
-    const cy = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
-    return screenToFlowPosition({ x: cx, y: cy });
-  }, [screenToFlowPosition]);
+    return rect
+      ? { x: rect.width / 2, y: rect.height / 2 }
+      : { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+  }, []);
 
   const loadCreativeDeskResources = useCallback(async () => {
     setCreativeDeskResourceLoading(true);
@@ -2476,10 +2476,11 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
     }
     setCreativeDeskResourceLoading(true);
     setCreativeDeskMessage('正在上传图片...');
-    const prepared: Array<{ url: string; title?: string; resourceId?: string }> = [];
+    const prepared: Array<{ url: string; title?: string; resourceId?: string; width?: number; height?: number }> = [];
     for (let i = 0; i < images.length; i += 1) {
       const file = images[i];
       try {
+        const naturalSize = await readImageNaturalSize(file);
         const media = await uploadCanvasMediaFile(file, 'image', i);
         let resource: api.ResourceItem | null = null;
         try {
@@ -2502,6 +2503,8 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
           url: resource?.fileUrl || media.url,
           title: resource?.title || media.name || file.name,
           resourceId: resource?.id,
+          width: naturalSize?.width || resource?.width,
+          height: naturalSize?.height || resource?.height,
         });
       } catch (err: any) {
         console.warn('创作台图片上传失败', err);
@@ -3626,6 +3629,7 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
       edges,
       viewport: getViewport(),
       nextNodeSerialId: nextNodeSerialIdRef.current,
+      creativeDesk,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -3636,7 +3640,7 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-  }, [nodes, edges, activeId, getViewport]);
+  }, [nodes, edges, activeId, getViewport, creativeDesk]);
 
   const handleImportClick = useCallback(() => {
     fileInputRef.current?.click();
@@ -3661,6 +3665,7 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
           nextNodeSerialIdRef.current = normalized.nextNodeSerialId;
           setNodes(normalized.nodes);
           setEdges(importedEdges);
+          setCreativeDesk(migrateCreativeDeskToViewportCoordinates(source.creativeDesk, source.viewport));
         } catch (err) {
           alert('导入失败:JSON 解析错误');
           console.error(err);
@@ -6829,23 +6834,25 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
           size={isPixel ? 1.6 : 1.2}
           color={dotColor}
         />
-        <CreativeDeskLayer
-          creativeDesk={creativeDesk}
-          editing={creativeDeskEditing}
-          activeItemId={creativeDeskActiveItemId}
-          resources={creativeDeskResources}
-          resourceLoading={creativeDeskResourceLoading}
-          message={creativeDeskMessage}
-          isPixel={isPixel}
-          isDark={isDark}
-          visualStyle={visualStyle}
-          onChange={setCreativeDesk}
-          onEditingChange={setCreativeDeskEditing}
-          onActiveItemChange={setCreativeDeskActiveItemId}
-          onUploadFiles={handleCreativeDeskUploadFiles}
-          onAddResource={handleCreativeDeskResourceTouch}
-          onRefreshResources={loadCreativeDeskResources}
-        />
+        {!creativeDeskEditing && (
+          <CreativeDeskLayer
+            creativeDesk={creativeDesk}
+            editing={false}
+            activeItemId={null}
+            resources={creativeDeskResources}
+            resourceLoading={creativeDeskResourceLoading}
+            message={creativeDeskMessage}
+            isPixel={isPixel}
+            isDark={isDark}
+            visualStyle={visualStyle}
+            onChange={setCreativeDesk}
+            onEditingChange={setCreativeDeskEditing}
+            onActiveItemChange={setCreativeDeskActiveItemId}
+            onUploadFiles={handleCreativeDeskUploadFiles}
+            onAddResource={handleCreativeDeskResourceTouch}
+            onRefreshResources={loadCreativeDeskResources}
+          />
+        )}
         {/* 对齐辅助线:在世界坐标系中随视口变换 */}
         {(guides.vertical.length > 0 || guides.horizontal.length > 0) && (
           <ViewportPortal>
@@ -6959,6 +6966,25 @@ function CanvasInner({ onAddNodeRef, onInsertWorkflowRef }: CanvasInnerProps) {
         {/* 选中可执行节点时的浮动操作栏 (执行 / 中止 / 关闭) */}
         <NodeActionBar />
       </ReactFlow>
+      {creativeDeskEditing && (
+        <CreativeDeskLayer
+          creativeDesk={creativeDesk}
+          editing={creativeDeskEditing}
+          activeItemId={creativeDeskActiveItemId}
+          resources={creativeDeskResources}
+          resourceLoading={creativeDeskResourceLoading}
+          message={creativeDeskMessage}
+          isPixel={isPixel}
+          isDark={isDark}
+          visualStyle={visualStyle}
+          onChange={setCreativeDesk}
+          onEditingChange={setCreativeDeskEditing}
+          onActiveItemChange={setCreativeDeskActiveItemId}
+          onUploadFiles={handleCreativeDeskUploadFiles}
+          onAddResource={handleCreativeDeskResourceTouch}
+          onRefreshResources={loadCreativeDeskResources}
+        />
+      )}
       {floatingControlRail}
 
       {/* 跨节点素材拖拽浮层 (Ctrl + 鼠标左键 从素材缩略图拖出) */}

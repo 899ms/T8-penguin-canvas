@@ -11,6 +11,7 @@ import {
 import { Box, MonitorPlay, Type as TypeIcon, Image as ImageIcon, Video as VideoIcon, Music, Download, Pencil, Check, Edit3, GitCompare } from 'lucide-react';
 import { useUpdateNodeData } from './useUpdateNodeData';
 import { useThemeStore } from '../../stores/theme';
+import { logBus } from '../../stores/logs';
 import { PORT_COLOR } from '../../config/portTypes';
 import { resolveThemeTemplate } from '../../theme/defaultTemplates';
 import ImageEditModal, { type ImageEditProduceMeta } from './ImageEditModal';
@@ -19,7 +20,7 @@ import CollectionSplitButton from '../CollectionSplitButton';
 import ImageHoverPreview from '../ImageHoverPreview';
 import LoopingVideo from '../LoopingVideo';
 import MediaMetadataBadge from '../MediaMetadataBadge';
-import RhImageCapabilityButton from '../RhImageCapabilityButton';
+import RhImageCapabilityRail from '../RhImageCapabilityRail';
 import SmartImage from '../SmartImage';
 import { useMaterialDropTarget } from '../../hooks/useMaterialDropTarget';
 import { useDragMaterialStore, type MaterialPayload } from '../../stores/dragMaterial';
@@ -40,6 +41,8 @@ import {
 import { collectMaterialSetBucketsFromData, valueOfMaterialSetItem } from '../../utils/materialSet';
 // v1.2.10.5: 节点落点防重叠 —— 双击编辑产出 N 节点 3 列宫格整组避让
 import { placeBatchNodes, defaultSizeOf, type Rect as PlacementRect } from '../../utils/nodePlacement';
+
+type OutputProduceMeta = ImageEditProduceMeta | { type: 'rh-capability'; label?: string };
 
 /**
  * OutputNode - 通用输出素材节点 (中继展示型)
@@ -97,6 +100,7 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
   const isDark = theme === 'dark';
   const d = (data as any) || {};
   const rf = useReactFlow();
+  const [rhCapabilityBusy, setRhCapabilityBusy] = useState(false);
   const activeTemplate = useMemo(
     () => resolveThemeTemplate(templateId, customTemplates),
     [templateId, customTemplates],
@@ -636,8 +640,14 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
     rf.addNodes(newNodes);
   };
 
-  const handleProduce = (urls: string[], _meta?: ImageEditProduceMeta) => {
-    if (!urls || urls.length === 0) return;
+  const handleProduce = (urls: string[], _meta?: OutputProduceMeta) => {
+    const cleanUrls = (Array.isArray(urls) ? urls : []).map((url) => String(url || '').trim()).filter(Boolean);
+    const isRhCapabilityOutput = _meta?.type === 'rh-capability';
+    const logSource = `rh-image-output:${id}`;
+    if (cleanUrls.length === 0) {
+      if (isRhCapabilityOutput) logBus.warn(`${_meta.label || 'RH 图像能力'}完成但没有可创建的图像 URL`, logSource);
+      return;
+    }
     const me = rf.getNode(id);
     const myW = (me as any)?.measured?.width || (me as any)?.width || 320;
     const myH = (me as any)?.measured?.height || (me as any)?.height || 360;
@@ -649,13 +659,16 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
     const ts = Date.now();
     // v1.2.10.5: 整组防重叠 —— 先算期望 3 列宫格, 再求公共偏移
     const _sz = defaultSizeOf('output');
-    const _desired: PlacementRect[] = urls.map((_, i) => ({
+    if (isRhCapabilityOutput) {
+      logBus.info(`${_meta.label || 'RH 图像能力'}准备创建 ${cleanUrls.length} 个输出素材节点`, logSource);
+    }
+    const _desired: PlacementRect[] = cleanUrls.map((_, i) => ({
       x: baseX + (i % COLS) * COL_W,
       y: baseY + Math.floor(i / COLS) * ROW_H,
       w: _sz.w, h: _sz.h,
     }));
     const _off = placeBatchNodes(_desired, rf.getNodes(), { source: `placement:produce:${id}` });
-    const newNodes: Node[] = urls.map((u, i) => {
+    const newNodes: Node[] = cleanUrls.map((u, i) => {
       const newId = `output-auto-edit-${id}-${ts}-${i}-${Math.random()
         .toString(36)
         .slice(2, 6)}`;
@@ -671,9 +684,28 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
           // 便于下游节点从 data 读取 (与现有 effect 透传不冲突)
           imageUrl: u,
         },
+        selected: isRhCapabilityOutput,
       } as Node;
     });
-    rf.addNodes(newNodes);
+    if (isRhCapabilityOutput) {
+      rf.setNodes((prev) => [...prev.map((node) => ({ ...node, selected: false })), ...newNodes]);
+      const first = newNodes[0];
+      if (first) {
+        window.setTimeout(() => {
+          try {
+            rf.setCenter(first.position.x + _sz.w / 2, first.position.y + _sz.h / 2, {
+              zoom: Math.max(0.7, Math.min(1.2, rf.getZoom())),
+              duration: 320,
+            });
+          } catch {
+            /* 视野定位失败不影响节点创建 */
+          }
+        }, 0);
+      }
+      logBus.success(`${_meta.label || 'RH 图像能力'}已创建 ${newNodes.length} 个输出素材节点`, logSource);
+    } else {
+      rf.addNodes(newNodes);
+    }
   };
 
   // === 跨节点拖拽: source (从 collected.* 拖出) ===
@@ -806,7 +838,9 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
   // === 选中节点上方浮动「Edit」按钮 ===
   // 仅当节点被选中且至少存在一张图像时出现，等价于双击图像触发
   // ImageEditModal（裁剪 / 宫格切分），多图时编辑第一张。
-  const canEditImage = selected && collected.images.length > 0;
+  const hasEditableImages = collected.images.length > 0;
+  const canEditImage = selected && hasEditableImages;
+  const showRhCapabilityRail = (selected || rhCapabilityBusy) && hasEditableImages;
   const onClickEditTopBtn = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (collected.images.length > 0) setEditingUrl(collected.images[0]);
@@ -828,7 +862,7 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
         accent={effectiveAccent}
         onResize={(_e, p) => setSize({ w: p.width, h: p.height })}
       />
-      {/* 选中时浮动图像操作按钮 — Edit 保持本地编辑, 抠图走 RH 工具箱能力层 */}
+      {/* 选中时浮动图像操作按钮 — Edit 保持本地编辑，RH 图像能力走左侧轨道 */}
       {canEditImage && (
         <div
           className="nodrag nopan"
@@ -868,13 +902,16 @@ const OutputNode = ({ id, data, selected }: NodeProps) => {
             <Edit3 size={12} />
             <span>Edit</span>
           </button>
-          <RhImageCapabilityButton
-            sourceUrls={collected.images}
-            accent={effectiveAccent}
-            isDark={isDark}
-            onComplete={(result) => handleProduce(result.imageUrls)}
-          />
         </div>
+      )}
+      {showRhCapabilityRail && (
+        <RhImageCapabilityRail
+          sourceUrls={collected.images}
+          accent={effectiveAccent}
+          isDark={isDark}
+          onComplete={(result) => handleProduce(result.imageUrls, { type: 'rh-capability', label: result.tool.title })}
+          onRunningChange={setRhCapabilityBusy}
+        />
       )}
       {/* target handle (左侧) - 上游任意类型可连入 */}
       <Handle
