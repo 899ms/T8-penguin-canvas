@@ -12,6 +12,7 @@
       "Electron 针对 VibeX RunningHub 登录做了专用适配：独立登录窗口、Token 同步、嵌入 iframe 刷新和下拉菜单定位修复，避免登录后又回到未登录态。",
       "VibeX 线上结果可通过 postMessage 发送回当前画布，T8 会创建文本 / 图像 / 视频 / 音频输出素材节点；Chrome 插件增加 RunningHub 页面桥接脚本，支持网页版 RunningHub/VibeX 把结果转发到本地画布。",
       "Electron 打包会随安装包带上网页图片反推插件目录 resources/extension/web-image-reverse/，post-build 会校验 manifest、background、content、runninghub-bridge 和样式文件都存在。",
+      "Electron 加密与 post-build 增加线上 VibeX 发布护栏：本地静态适配路由 backend/src/routes/vibex.js 不会被编译进安装包，产物出现 backend-enc/routes/vibex.t8c 会直接阻断发布。",
       "批量素材处理节点完善 RH 能力层：批量抠图、批量扩图和高清放大全部走 RH 工具箱能力，不再回落到低质量本地处理；支持本地并发、RH 并发、失败重试和失败后继续。",
       "批量素材处理新增抠图后比例、扩图预设、高清倍率、打开输出文件夹和清晰错误提示，完成后仍只更新本节点结果，不自动把输出素材铺满画布。",
       "大画布性能优化：生成历史抽屉关闭时只计算轻量计数，导出资源包时再完整收集；大节点量拖动画布 / 拖节点时会隐藏非选中节点的端口、缩放点和悬浮操作条，并暂停非焦点节点动画。",

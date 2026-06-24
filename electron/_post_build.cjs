@@ -83,6 +83,14 @@ function checkWebImageExtensionResources() {
   checkFile(path.join(extensionRoot, 'styles', 'content.css'));
 }
 
+function checkNoLocalVibexRoute() {
+  const localRoute = path.join(RES, 'backend-enc', 'routes', 'vibex.t8c');
+  if (fs.existsSync(localRoute)) {
+    failSecurity('local VibeX static adapter must not be shipped in online-only releases:', localRoute);
+  }
+  console.log('  ✅ local VibeX static adapter route is not packaged');
+}
+
 function listDir(p, indent = '    ') {
   if (!fs.existsSync(p)) return;
   for (const name of fs.readdirSync(p)) {
@@ -466,6 +474,7 @@ function main() {
   checkFile(path.join(RES, 'backend-enc', 'routes', 'achievements.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'routes', 'topaz.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'routes', 'vibexBridge.t8c'));
+  checkNoLocalVibexRoute();
   checkFile(path.join(RES, 'backend-enc', 'achievements', 'media.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'achievements', 'store.t8c'));
   checkFile(path.join(RES, 'backend-enc', 'cloudUploads', 'settings.t8c'));
